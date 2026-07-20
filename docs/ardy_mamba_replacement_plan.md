@@ -128,7 +128,8 @@ Mamba improves speed / memory / horizon.
 
 ## 5. Drop-In Block API
 
-The Mamba block should expose the ARDY transformer block interface:
+This interface is the target, not current implemented code. The Mamba block
+should expose the ARDY transformer block interface:
 
 ```python
 class ArdyMambaBlock(nn.Module):
@@ -166,7 +167,63 @@ For strict ARDY compatibility, `state`, `reset_mask`, `memory_condition`, and
 `return_aux` can be ignored in the first drop-in version. They become active
 when cross-window memory is added.
 
-## 6. First Implementation Mode
+## 6. What We Do Now
+
+Current status:
+
+```text
+implemented: no ARDY Mamba replacement code yet
+validated: Mamba-3 SISO kernel can run in isolation
+next implementation: Mamba3ChunkWrapper.forward_chunk
+next validation: full-vs-chunk, reset, determinism
+next ARDY-facing code after that: ArdyMambaBlock
+```
+
+Current interface status:
+
+```text
+forward_chunk: planned API, not implemented yet
+ArdyMambaBlock: planned API, not implemented yet
+forward_chunk_with_memory: future API, not implemented yet
+```
+
+The immediate work is not to touch ARDY. The immediate work is to make the
+Mamba-side chunk interface real and verified.
+
+## 7. After One Step Is Verified
+
+After `Mamba3ChunkWrapper.forward_chunk` passes Phase-0 tests, the interface
+becomes usable for non-ARDY synthetic tests:
+
+```python
+outputs, next_state, aux = model.forward_chunk(
+    x=chunk,
+    state=prev_state,
+    reset_mask=reset_mask,
+    return_aux=True,
+)
+```
+
+This can implement:
+
+```text
+chunked SISO Mamba inference/training
+state carry across chunks
+episode reset
+latency / peak-memory measurement
+synthetic baseline training
+```
+
+It still cannot implement:
+
+```text
+ARDY root/body replacement
+cross-window Event Memory
+learned State-QKV retrieval
+long-horizon memory correction
+```
+
+## 8. First ARDY Implementation Mode
 
 First version: **stateless denoiser-block replacement**.
 
@@ -202,7 +259,76 @@ Can it train on the same denoising target?
 
 It does not yet solve long-horizon memory.
 
-## 7. Long-Horizon Upgrade
+## 9. After ARDY Drop-In Block Is Verified
+
+After `ArdyMambaBlock` exists and passes shape / denoising / one-window tests,
+the ARDY-facing interface is:
+
+```python
+output = block(
+    x,
+    x_pad_mask,
+    text_feat,
+    text_feat_pad_mask,
+    timesteps,
+    first_heading_angle,
+    token_index,
+)
+```
+
+This can implement:
+
+```text
+drop-in replacement of root_model
+drop-in replacement of body_model
+single denoising step
+one autoregressive generation window
+short ARDY generation sample
+latency / memory comparison against transformer block
+```
+
+It still cannot implement:
+
+```text
+cross-window memory
+event retrieval
+state-based long-horizon correction
+```
+
+## 10. Final Work After Memory Is Done
+
+After StateProjector + Event Memory + State-QKV pass the required gates, the
+final interface is:
+
+```python
+output, next_state, next_memory, aux = block(
+    x,
+    x_pad_mask,
+    text_feat,
+    text_feat_pad_mask,
+    timesteps,
+    first_heading_angle,
+    token_index,
+    state=prev_state,
+    memory=prev_memory,
+    reset_mask=reset_mask,
+    update_memory=commit_clean_window,
+    return_aux=True,
+)
+```
+
+This can implement:
+
+```text
+Mamba state carry across autoregressive windows
+Event Memory retrieval across windows
+memory read during diffusion
+memory commit after final clean/generated window
+long-horizon drift / recall correction
+diagnostics for retrieval and memory usage
+```
+
+## 11. Long-Horizon Upgrade
 
 ARDY currently manages long generation by cropping history to a trained window.
 In `scripts/generate.py`, `--history_frames` caps visible history; in
@@ -236,7 +362,7 @@ inner chunk = diffusion
 inter chunk = autoregressive memory update
 ```
 
-## 8. State and Memory Semantics
+## 12. State and Memory Semantics
 
 Mamba recurrent state is continuous compressed history. Event Memory is
 explicit addressable history.
@@ -255,7 +381,7 @@ SISO Mamba block
 Do not train learned QKV or compressed memory before the oracle-memory gate
 shows a clear gain on long-horizon synthetic tasks.
 
-## 9. Current Mamba-Side Progress
+## 13. Current Mamba-Side Progress
 
 Current status:
 
@@ -277,7 +403,7 @@ What this means for ARDY collaborators:
 - ARDY-side data, diffusion, motion representation, and export code should
   remain unchanged until the Mamba block passes its own Phase-0 tests.
 
-## 10. ARDY Integration Milestones
+## 14. ARDY Integration Milestones
 
 ### Milestone A: Read-only ARDY baseline
 
@@ -343,7 +469,7 @@ oracle memory improves long-horizon synthetic recall
 motion drift reduces at longer horizons
 ```
 
-## 11. Contribution Mapping
+## 15. Contribution Mapping
 
 Contribution 1, real time:
 
@@ -371,7 +497,7 @@ Compare baseline ARDY vs Mamba-denoiser ARDY vs memory-augmented Mamba.
 Later connect generated G1 qpos/motion to G1 simulation or real-world stack.
 ```
 
-## 12. Non-Goals For First Server Handoff
+## 16. Non-Goals For First Server Handoff
 
 Do not start with:
 

@@ -53,5 +53,7 @@ outputs, next_state = model.forward_chunk(
 )
 ```
 
+This is the planned next interface, not a completed implementation yet.
+
 Current stage is SISO Mamba-3 only. MIMO/CUTE and downstream motion training
 are later-stage work.
