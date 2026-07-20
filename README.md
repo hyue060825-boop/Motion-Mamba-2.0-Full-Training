@@ -42,6 +42,10 @@ Read the ARDY replacement plan:
 docs/ardy_mamba_replacement_plan.md
 ```
 
+Progress is tracked with `[ ]` / `[x]` checklists in the docs. A planned API is
+not considered usable until its checklist and validation criteria are marked
+complete.
+
 The first implementation target is:
 
 ```python

@@ -49,7 +49,7 @@ raw Mamba recurrent state
 Stage 1 is **SISO Mamba-3 only**. MIMO, CUTE step decode, learned memory
 lifecycle, compressed memory, and downstream motion integration are later.
 
-## 3. Stage Order And Interface Maturity
+## 3. Master Checklist And Interface Maturity
 
 Do not skip ahead.
 
@@ -63,21 +63,55 @@ Level 2: memory-augmented operator implemented and verified
 
 Current state is **Level 0**.
 
+Master checklist:
+
+- [x] **Audit Mamba-3 state/chunk API.**
+  Acceptance: identify the recurrent state tensor to expose, identify the
+  kernel path for multi-token chunk continuation, and document why downstream
+  code must not call Mamba internals directly.
+- [x] **Verify SISO Mamba-3 kernel can run in isolation.**
+  Acceptance: basic forward/backward smoke test runs outside ARDY.
+- [ ] **Implement `Mamba3ChunkWrapper.forward_chunk`.**
+  Acceptance: exposes the planned `forward_chunk` API and returns an opaque
+  `MambaState`.
+- [ ] **Pass Phase-0 wrapper tests.**
+  Acceptance: full-vs-chunk consistency, reset, determinism, and basic
+  forward/backward tests all pass.
+- [ ] **Implement `StateProjector`.**
+  Acceptance: projects `ssm_state` into stable per-chunk state summaries
+  `s_before`, `s_after`, and `delta`.
+- [ ] **Pass state probe.**
+  Acceptance: state summaries predict basic synthetic event attributes above
+  random baseline.
+- [ ] **Implement fixed-capacity oracle Event Memory.**
+  Acceptance: oracle retrieval improves long-horizon synthetic tasks.
+- [ ] **Implement learned State-QKV retrieval.**
+  Acceptance: learned retrieval beats random and approaches oracle behavior.
+- [ ] **Implement ARDY-compatible `ArdyMambaBlock`.**
+  Acceptance: same call signature as ARDY `TransformerEncoderBlock`; output
+  shapes match `root_model` and `body_model` requirements.
+- [ ] **Pass ARDY drop-in smoke tests.**
+  Acceptance: single denoising step, one autoregressive window, short sample,
+  and G1 export path run with the Mamba block.
+- [ ] **Add cross-window state/memory for ARDY.**
+  Acceptance: memory is read during denoising and committed only after the
+  final clean/generated window.
+- [ ] **Run final comparison.**
+  Acceptance: compare ARDY baseline, Mamba-denoiser ARDY, and
+  memory-augmented Mamba on agreed latency, memory, and motion metrics.
+
 ## 4. Current Mamba-Side Progress
 
-Current status:
+Current status checklist:
 
-```text
-done: Mamba-3 state/chunk API audit
-done: SISO kernel smoke and basic forward/backward memory checks
-current: no committed Mamba wrapper implementation in this repo yet
-next: implement Mamba3ChunkWrapper.forward_chunk
-next: run Phase-0 full-vs-chunk / reset / determinism tests
-not yet: StateProjector
-not yet: Event Memory
-not yet: learned State-QKV
-not yet: ARDY drop-in Mamba block
-```
+- [x] Mamba-3 state/chunk API audit is complete.
+- [x] SISO kernel smoke and basic forward/backward memory checks are complete.
+- [ ] No committed `Mamba3ChunkWrapper` implementation exists yet.
+- [ ] No Phase-0 wrapper test suite has passed yet.
+- [ ] No `StateProjector` implementation exists yet.
+- [ ] No Event Memory implementation exists yet.
+- [ ] No learned State-QKV implementation exists yet.
+- [ ] No ARDY-compatible `ArdyMambaBlock` exists yet.
 
 What collaborators can rely on now:
 
@@ -96,6 +130,14 @@ What collaborators should not assume yet:
 This is the interface we are about to implement. It is documented so downstream
 collaborators can prepare adapters, but it should not be treated as available
 code until Level 1 is marked done.
+
+Level 0 checklist:
+
+- [x] Interface shape documented.
+- [x] ARDY replacement target documented.
+- [ ] Interface implemented in code.
+- [ ] Interface verified by tests.
+- [ ] Interface safe for downstream dependency.
 
 ```python
 outputs, next_state = model.forward_chunk(
@@ -117,14 +159,14 @@ memory_condition: [batch, d_memory] or None
 reset_mask:       [batch] bool, True means reset this episode state
 ```
 
-Implementation requirements:
+Implementation requirements checklist:
 
-- Use raw `mamba3_siso_combined(..., Input_States=...,
+- [ ] Use raw `mamba3_siso_combined(..., Input_States=...,
   return_final_states=True)`.
-- Do not use `Mamba3.forward()` for non-zero chunk continuation.
-- Do not make downstream code depend on single-token decode internals.
-- Expose recurrent state through an opaque `MambaState`.
-- Use `reset_mask` to reset episode state.
+- [ ] Do not use `Mamba3.forward()` for non-zero chunk continuation.
+- [ ] Do not make downstream code depend on single-token decode internals.
+- [ ] Expose recurrent state through an opaque `MambaState`.
+- [ ] Use `reset_mask` to reset episode state.
 
 Planned state object:
 
@@ -140,13 +182,11 @@ treat the state as opaque except for reset and detach policy.
 
 Level 1 is reached after:
 
-```text
-Mamba3ChunkWrapper.forward_chunk implemented
-full-sequence vs chunked consistency passed
-state reset test passed
-determinism test passed
-basic forward/backward smoke passed
-```
+- [ ] `Mamba3ChunkWrapper.forward_chunk` implemented.
+- [ ] Full-sequence vs chunked consistency test passed.
+- [ ] State reset test passed.
+- [ ] Determinism test passed.
+- [ ] Basic forward/backward smoke test passed.
 
 At Level 1, the usable interface is:
 
@@ -159,13 +199,13 @@ outputs, next_state, aux = model.forward_chunk(
 )
 ```
 
-Expected capability:
+Expected capability after Level 1:
 
-- run chunked Mamba sequence modeling;
-- carry recurrent state across chunks;
-- reset state between episodes;
-- measure latency and peak memory;
-- support pure Mamba baseline training on synthetic tasks.
+- [ ] Run chunked Mamba sequence modeling.
+- [ ] Carry recurrent state across chunks.
+- [ ] Reset state between episodes.
+- [ ] Measure latency and peak memory.
+- [ ] Support pure Mamba baseline training on synthetic tasks.
 
 Expected `aux` keys:
 
@@ -183,12 +223,10 @@ It can start shape-adapter work and synthetic tests.
 
 Level 2 is reached after:
 
-```text
-StateProjector implemented
-synthetic state probes pass
-oracle Event Memory improves long-horizon tasks
-learned State-QKV is implemented only after oracle memory helps
-```
+- [ ] `StateProjector` implemented.
+- [ ] Synthetic state probes passed.
+- [ ] Oracle Event Memory improves long-horizon tasks.
+- [ ] Learned State-QKV implemented only after oracle memory helps.
 
 At Level 2, expose:
 
@@ -219,12 +257,12 @@ peak_gpu_memory
 Downstream experiments should save `aux`; otherwise we cannot tell whether
 memory works or is being ignored.
 
-Expected capability:
+Expected capability after Level 2:
 
-- preserve compressed recurrent state across chunks;
-- retrieve explicit long-term event memory;
-- reduce long-horizon recall decay in synthetic tasks;
-- provide diagnostics showing whether memory is used.
+- [ ] Preserve compressed recurrent state across chunks.
+- [ ] Retrieve explicit long-term event memory.
+- [ ] Reduce long-horizon recall decay in synthetic tasks.
+- [ ] Provide diagnostics showing whether memory is used.
 
 ## 8. Final ARDY-Facing Interface
 
@@ -261,13 +299,13 @@ output = block(...)
 output, next_state, next_memory, aux = block(..., return_aux=True)
 ```
 
-Final capability:
+Final capability checklist:
 
-- replace ARDY `root_model` and `body_model`;
-- keep ARDY diffusion, autoencoder, motion representation, and export code
+- [ ] Replace ARDY `root_model` and `body_model`.
+- [ ] Keep ARDY diffusion, autoencoder, motion representation, and export code
   unchanged;
-- run autoregressive diffusion with Mamba sequence mixing;
-- optionally carry Mamba state / Event Memory across AR windows.
+- [ ] Run autoregressive diffusion with Mamba sequence mixing.
+- [ ] Optionally carry Mamba state / Event Memory across AR windows.
 
 ## 9. Downstream Inputs
 
@@ -314,20 +352,22 @@ injection_ablation:
 
 Recommended curriculum:
 
-1. Train pure Mamba-3 baseline.
-2. Freeze backbone; train projector / memory / injection modules.
-3. Joint finetune with smaller backbone LR.
+- [ ] Train pure Mamba-3 baseline.
+- [ ] Freeze backbone; train projector / memory / injection modules.
+- [ ] Joint finetune with smaller backbone LR.
 
 ## 11. Minimal Integration Checklist
 
 Before downstream work depends on this operator, verify:
 
-- `forward_chunk` returns the same outputs as full-sequence execution within
+- [ ] `forward_chunk` returns the same outputs as full-sequence execution within
   tolerance.
-- State reset prevents leakage across episodes.
-- Carrying state without reset changes the second episode, proving state is
+- [ ] State reset prevents leakage across episodes.
+- [ ] Carrying state without reset changes the second episode, proving state is
   active.
-- Determinism holds under the same seed and input.
-- Baseline training loss decreases on a small synthetic task.
-- State projector features predict basic event attributes better than random.
-- Oracle memory improves long-horizon performance before learned QKV is built.
+- [ ] Determinism holds under the same seed and input.
+- [ ] Baseline training loss decreases on a small synthetic task.
+- [ ] State projector features predict basic event attributes better than
+  random.
+- [ ] Oracle memory improves long-horizon performance before learned QKV is
+  built.

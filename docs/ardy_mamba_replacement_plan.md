@@ -169,23 +169,19 @@ when cross-window memory is added.
 
 ## 6. What We Do Now
 
-Current status:
+Current status checklist:
 
-```text
-implemented: no ARDY Mamba replacement code yet
-validated: Mamba-3 SISO kernel can run in isolation
-next implementation: Mamba3ChunkWrapper.forward_chunk
-next validation: full-vs-chunk, reset, determinism
-next ARDY-facing code after that: ArdyMambaBlock
-```
+- [ ] No ARDY Mamba replacement code is implemented yet.
+- [x] Mamba-3 SISO kernel can run in isolation.
+- [ ] Next implementation: `Mamba3ChunkWrapper.forward_chunk`.
+- [ ] Next validation: full-vs-chunk, reset, determinism.
+- [ ] Next ARDY-facing code after that: `ArdyMambaBlock`.
 
 Current interface status:
 
-```text
-forward_chunk: planned API, not implemented yet
-ArdyMambaBlock: planned API, not implemented yet
-forward_chunk_with_memory: future API, not implemented yet
-```
+- [ ] `forward_chunk`: planned API, not implemented yet.
+- [ ] `ArdyMambaBlock`: planned API, not implemented yet.
+- [ ] `forward_chunk_with_memory`: future API, not implemented yet.
 
 The immediate work is not to touch ARDY. The immediate work is to make the
 Mamba-side chunk interface real and verified.
@@ -204,24 +200,20 @@ outputs, next_state, aux = model.forward_chunk(
 )
 ```
 
-This can implement:
+This can implement after verification:
 
-```text
-chunked SISO Mamba inference/training
-state carry across chunks
-episode reset
-latency / peak-memory measurement
-synthetic baseline training
-```
+- [ ] Chunked SISO Mamba inference/training.
+- [ ] State carry across chunks.
+- [ ] Episode reset.
+- [ ] Latency / peak-memory measurement.
+- [ ] Synthetic baseline training.
 
 It still cannot implement:
 
-```text
-ARDY root/body replacement
-cross-window Event Memory
-learned State-QKV retrieval
-long-horizon memory correction
-```
+- [ ] ARDY root/body replacement.
+- [ ] Cross-window Event Memory.
+- [ ] Learned State-QKV retrieval.
+- [ ] Long-horizon memory correction.
 
 ## 8. First ARDY Implementation Mode
 
@@ -243,11 +235,11 @@ self.body_model = ArdyMambaBlock(...)
 
 The first Mamba block should:
 
-1. build the same prefix tokens as `TransformerEncoderBlock`;
-2. concatenate prefix + motion tokens;
-3. run a SISO Mamba-3 sequence mixer;
-4. return only the motion-token outputs;
-5. project to `output_dim`.
+- [ ] Build the same prefix tokens as `TransformerEncoderBlock`.
+- [ ] Concatenate prefix + motion tokens.
+- [ ] Run a SISO Mamba-3 sequence mixer.
+- [ ] Return only the motion-token outputs.
+- [ ] Project to `output_dim`.
 
 This version answers:
 
@@ -276,24 +268,20 @@ output = block(
 )
 ```
 
-This can implement:
+This can implement after verification:
 
-```text
-drop-in replacement of root_model
-drop-in replacement of body_model
-single denoising step
-one autoregressive generation window
-short ARDY generation sample
-latency / memory comparison against transformer block
-```
+- [ ] Drop-in replacement of `root_model`.
+- [ ] Drop-in replacement of `body_model`.
+- [ ] Single denoising step.
+- [ ] One autoregressive generation window.
+- [ ] Short ARDY generation sample.
+- [ ] Latency / memory comparison against transformer block.
 
 It still cannot implement:
 
-```text
-cross-window memory
-event retrieval
-state-based long-horizon correction
-```
+- [ ] Cross-window memory.
+- [ ] Event retrieval.
+- [ ] State-based long-horizon correction.
 
 ## 10. Final Work After Memory Is Done
 
@@ -317,16 +305,14 @@ output, next_state, next_memory, aux = block(
 )
 ```
 
-This can implement:
+This can implement after final memory work:
 
-```text
-Mamba state carry across autoregressive windows
-Event Memory retrieval across windows
-memory read during diffusion
-memory commit after final clean/generated window
-long-horizon drift / recall correction
-diagnostics for retrieval and memory usage
-```
+- [ ] Mamba state carry across autoregressive windows.
+- [ ] Event Memory retrieval across windows.
+- [ ] Memory read during diffusion.
+- [ ] Memory commit after final clean/generated window.
+- [ ] Long-horizon drift / recall correction.
+- [ ] Diagnostics for retrieval and memory usage.
 
 ## 11. Long-Horizon Upgrade
 
@@ -414,60 +400,53 @@ scripts/generate.py
 scripts/interactive_demo/generation.py
 ```
 
-Record:
+Checklist:
 
-```text
-model name
-duration
-diffusion steps
-history_frames
-generation time
-peak GPU memory
-output .npz / .csv path
-```
+- [ ] Run unmodified ARDY generation.
+- [ ] Record model name.
+- [ ] Record duration.
+- [ ] Record diffusion steps.
+- [ ] Record history frames.
+- [ ] Record generation time.
+- [ ] Record peak GPU memory.
+- [ ] Record output `.npz` / `.csv` path.
 
 ### Milestone B: Drop-in Mamba denoiser block
 
 Implement `ArdyMambaBlock` with the same forward signature as
 `TransformerEncoderBlock`.
 
-Validation:
+Validation checklist:
 
-```text
-shape parity: root output and body output match ARDY expected shapes
-mask parity: valid/padded tokens do not crash
-single denoising step runs
-one autoregressive window runs
-short generate.py sample writes .npz
-G1 sample writes MuJoCo .csv
-```
+- [ ] Shape parity: root output and body output match ARDY expected shapes.
+- [ ] Mask parity: valid/padded tokens do not crash.
+- [ ] Single denoising step runs.
+- [ ] One autoregressive window runs.
+- [ ] Short generation sample writes `.npz`.
+- [ ] G1 sample writes MuJoCo `.csv`.
 
 ### Milestone C: Basic training
 
 Train the Mamba-denoiser version on the same ARDY-style target.
 
-Record:
+Checklist:
 
-```text
-loss curve
-peak GPU memory
-tokens/sec or windows/sec
-short qualitative generation
-comparison to transformer denoiser under same settings
-```
+- [ ] Record loss curve.
+- [ ] Record peak GPU memory.
+- [ ] Record tokens/sec or windows/sec.
+- [ ] Record short qualitative generation.
+- [ ] Compare to transformer denoiser under same settings.
 
 ### Milestone D: Cross-window state/memory
 
 Add state handoff and Event Memory across AR windows.
 
-Validation:
+Validation checklist:
 
-```text
-reset prevents episode leakage
-state carry changes later windows
-oracle memory improves long-horizon synthetic recall
-motion drift reduces at longer horizons
-```
+- [ ] Reset prevents episode leakage.
+- [ ] State carry changes later windows.
+- [ ] Oracle memory improves long-horizon synthetic recall.
+- [ ] Motion drift reduces at longer horizons.
 
 ## 15. Contribution Mapping
 
@@ -501,14 +480,12 @@ Later connect generated G1 qpos/motion to G1 simulation or real-world stack.
 
 Do not start with:
 
-```text
-rewriting ARDY diffusion sampler
-rewriting the autoencoder
-rewriting motion_rep
-rewriting MuJoCo export
-training MIMO/CUTE path
-full HumanML3D/KITML/BABEL benchmark
-real robot deployment
-```
+- [ ] Rewriting ARDY diffusion sampler.
+- [ ] Rewriting the autoencoder.
+- [ ] Rewriting `motion_rep`.
+- [ ] Rewriting MuJoCo export.
+- [ ] Training MIMO/CUTE path.
+- [ ] Full HumanML3D/KITML/BABEL benchmark.
+- [ ] Real robot deployment.
 
 The clean first target is the root/body denoiser block replacement.
