@@ -34,23 +34,6 @@ Our humanoid-control paper has three contribution tracks:
 
 ## 2. What ARDY Already Provides
 
-Local ARDY reference inspected:
-
-```text
-/home/plote/mambamotion/basecode/ardy
-```
-
-Key ARDY files:
-
-```text
-ardy/model/ardy_model.py
-ardy/model/auto_latent_twostage_denoiser.py
-ardy/model/backbone.py
-scripts/generate.py
-scripts/interactive_demo/generation.py
-ardy/exports/mujoco.py
-```
-
 ARDY already provides:
 
 - autoregressive diffusion over motion windows;
@@ -63,6 +46,10 @@ ARDY already provides:
   post-processing.
 
 We should not rewrite those first.
+
+The Mamba replacement should integrate at the model interface level: keep
+ARDY's generation loop and motion I/O stable, and replace only the denoiser
+sequence mixer first.
 
 ## 3. Actual Replacement Point
 
@@ -268,7 +255,29 @@ SISO Mamba block
 Do not train learned QKV or compressed memory before the oracle-memory gate
 shows a clear gain on long-horizon synthetic tasks.
 
-## 9. ARDY Integration Milestones
+## 9. Current Mamba-Side Progress
+
+Current status:
+
+```text
+done: Mamba-3 state/chunk API audit
+done: SISO kernel smoke and basic forward/backward memory checks
+next: Mamba3ChunkWrapper.forward_chunk
+next: Phase-0 full-vs-chunk / reset / determinism tests
+not yet: ArdyMambaBlock
+not yet: ARDY root/body replacement
+not yet: cross-window Event Memory integration
+```
+
+What this means for ARDY collaborators:
+
+- The interface contract is ready.
+- The first ARDY replacement target is clear.
+- The drop-in `ArdyMambaBlock` is not implemented yet.
+- ARDY-side data, diffusion, motion representation, and export code should
+  remain unchanged until the Mamba block passes its own Phase-0 tests.
+
+## 10. ARDY Integration Milestones
 
 ### Milestone A: Read-only ARDY baseline
 
@@ -334,7 +343,7 @@ oracle memory improves long-horizon synthetic recall
 motion drift reduces at longer horizons
 ```
 
-## 10. Contribution Mapping
+## 11. Contribution Mapping
 
 Contribution 1, real time:
 
@@ -362,7 +371,7 @@ Compare baseline ARDY vs Mamba-denoiser ARDY vs memory-augmented Mamba.
 Later connect generated G1 qpos/motion to G1 simulation or real-world stack.
 ```
 
-## 11. Non-Goals For First Server Handoff
+## 12. Non-Goals For First Server Handoff
 
 Do not start with:
 

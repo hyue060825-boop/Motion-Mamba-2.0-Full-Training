@@ -66,11 +66,33 @@ Do not skip ahead.
 6. Add oracle Event Memory.
 7. Only if oracle memory helps, add learned State-QKV retrieval.
 
-## 4. Public API
+## 4. Current Mamba-Side Progress
+
+Current status:
+
+```text
+done: Mamba-3 state/chunk API audit
+done: SISO kernel smoke and basic forward/backward memory checks
+next: implement Mamba3ChunkWrapper.forward_chunk
+next: Phase-0 full-vs-chunk / reset / determinism tests
+not yet: StateProjector
+not yet: Event Memory
+not yet: learned State-QKV
+not yet: ARDY drop-in Mamba block
+```
+
+Current implementation direction:
+
+- Stage 1 uses SISO Mamba-3.
+- The chunk wrapper should call the raw SISO chunk kernel directly.
+- Mamba recurrent state should be exposed through an opaque `MambaState`.
+- Downstream callers should use `reset_mask` instead of mutating state tensors.
+
+## 5. Public API
 
 Downstream code should depend on a small API, not on upstream Mamba internals.
 
-### 4.1 Chunk Wrapper
+### 5.1 Chunk Wrapper
 
 ```python
 outputs, next_state = model.forward_chunk(
@@ -97,9 +119,9 @@ Stage-1 implementation requirements:
 - Use raw `mamba3_siso_combined(..., Input_States=...,
   return_final_states=True)`.
 - Do not use `Mamba3.forward()` for non-zero chunk continuation.
-- Do not use `Mamba3.step()` in the current local environment.
+- Do not make downstream code depend on single-token decode internals.
 
-### 4.2 State Object
+### 5.2 State Object
 
 The state object hides upstream Mamba internals from downstream code. At
 minimum it must carry:
@@ -111,7 +133,7 @@ ssm_state: [batch, nheads, headdim, d_state], fp32
 Optional fields can be added if the wrapper needs them. Downstream code should
 treat the state as opaque except for reset and detach policy.
 
-### 4.3 Memory-Augmented Forward
+### 5.3 Memory-Augmented Forward
 
 After Event Memory exists, expose:
 
@@ -142,7 +164,7 @@ peak_gpu_memory
 Downstream experiments should save `aux`; otherwise we cannot tell whether
 memory works or is being ignored.
 
-## 5. Downstream Inputs
+## 6. Downstream Inputs
 
 The downstream side provides:
 
@@ -167,7 +189,7 @@ repeated pose motif
 object-interaction transition
 ```
 
-## 6. Training Modes
+## 7. Training Modes
 
 Expose these modes as configs:
 
@@ -191,33 +213,6 @@ Recommended curriculum:
 2. Freeze backbone; train projector / memory / injection modules.
 3. Joint finetune with smaller backbone LR.
 
-## 7. Local-vs-Server Boundary
-
-Local RTX 3070 Laptop 8 GB is enough for the current Mamba-side stage:
-
-```text
-SISO
-bf16
-D <= 768 initially
-chunk_len in {8, 16, 32, 64, 128}
-memory capacity <= 512 initially
-synthetic Phase 0-5 experiments
-```
-
-Use chunked execution for long horizons such as `T=8192` or `T=32768`. Do not
-keep an unbounded full-sequence computation graph unless explicitly testing
-memory limits.
-
-Use a server for:
-
-```text
-MIMO / CUTE path
-ARDY or motion downstream large training
-HumanML3D / KITML / BABEL full-scale training
-large model-width or batch-size sweeps
-actual local OOM
-```
-
 ## 8. Minimal Integration Checklist
 
 Before downstream work depends on this operator, verify:
@@ -231,24 +226,3 @@ Before downstream work depends on this operator, verify:
 - Baseline training loss decreases on a small synthetic task.
 - State projector features predict basic event attributes better than random.
 - Oracle memory improves long-horizon performance before learned QKV is built.
-
-## 9. Known Environment Notes
-
-Known-good local path for SISO:
-
-```text
-env: env_isaaclab
-torch: 2.7.0+cu128
-temporary Triton overlay: /tmp/mamba_op_triton
-triton in overlay: 3.5.1
-```
-
-Known blocked paths:
-
-```text
-MIMO: TileLang import failure in current local environment
-Mamba3.step(): CUTE/quack requires torch.float4_e2m1fn_x2, missing in Torch 2.7
-```
-
-Therefore the current implementation should call the raw SISO chunk kernel
-directly.
