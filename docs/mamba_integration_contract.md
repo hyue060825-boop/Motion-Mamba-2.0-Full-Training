@@ -5,6 +5,12 @@ Last updated: 2026-07-20.
 Audience: collaborators connecting the Mamba-side operator to downstream
 training, simulation, or server-side experiments.
 
+For ARDY-specific replacement details, also read:
+
+```text
+docs/ardy_mamba_replacement_plan.md
+```
+
 ## 1. Responsibility Split
 
 The Mamba side owns the **sequence operator and memory interface**.

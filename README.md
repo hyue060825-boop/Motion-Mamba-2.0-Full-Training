@@ -36,6 +36,12 @@ Read the integration contract:
 docs/mamba_integration_contract.md
 ```
 
+Read the ARDY replacement plan:
+
+```text
+docs/ardy_mamba_replacement_plan.md
+```
+
 The first implementation target is:
 
 ```python
