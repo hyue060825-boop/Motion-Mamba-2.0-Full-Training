@@ -169,51 +169,75 @@ when cross-window memory is added.
 
 ## 6. What We Do Now
 
-Current status checklist:
+**Corrected 2026-07-25** -- this section had gone stale since 2026-07-20 and
+understated actual progress. Current status checklist:
 
-- [ ] No ARDY Mamba replacement code is implemented yet.
 - [x] Mamba-3 SISO kernel can run in isolation.
-- [ ] Next implementation: `Mamba3ChunkWrapper.forward_chunk`.
-- [ ] Next validation: full-vs-chunk, reset, determinism.
-- [ ] Next ARDY-facing code after that: `ArdyMambaBlock`.
+- [x] `Mamba3ChunkWrapper.forward_chunk` implemented and Phase-0-verified.
+- [x] `StateProjector`, Event Memory (FIFO + Participative), and learned
+  State-QKV retrieval are ALL implemented and validated -- see
+  `src/state_memory_operator/` and `docs/mamba_integration_contract.md`
+  Sections 3/6/7 for the full status.
+- [ ] No ARDY Mamba replacement code is implemented yet -- `ArdyMambaBlock`
+  does not exist. This is the actual next step now, not the chunk wrapper.
 
 Current interface status:
 
-- [ ] `forward_chunk`: planned API, not implemented yet.
-- [ ] `ArdyMambaBlock`: planned API, not implemented yet.
-- [ ] `forward_chunk_with_memory`: future API, not implemented yet.
+- [x] `forward_chunk`: implemented, real, tested
+  (`state_memory_operator.StateTransitionMemoryOperator.forward_chunk`).
+- [x] `forward_chunk_with_memory`: implemented, real, tested (same class).
+- [ ] `ArdyMambaBlock`: planned API, not implemented yet -- this is the
+  actual immediate work now.
 
-The immediate work is not to touch ARDY. The immediate work is to make the
-Mamba-side chunk interface real and verified.
+The immediate work is still not to touch ARDY's own code -- but it's no
+longer "make the chunk interface real," since that's done. It's building
+`ArdyMambaBlock` around the now-real `state_memory_operator` package.
 
-## 7. After One Step Is Verified
+## 7. The Chunk Interface Is Verified -- What That Unlocks
 
-After `Mamba3ChunkWrapper.forward_chunk` passes Phase-0 tests, the interface
-becomes usable for non-ARDY synthetic tests:
+`Mamba3ChunkWrapper.forward_chunk` passed Phase-0 tests; the interface is
+usable for non-ARDY synthetic tests (and has been used for exactly that --
+see the research repo's whole Stage-1 program):
 
 ```python
-outputs, next_state, aux = model.forward_chunk(
+outputs, next_state, aux = operator.forward_chunk(
     x=chunk,
     state=prev_state,
     reset_mask=reset_mask,
-    return_aux=True,
 )
 ```
 
-This can implement after verification:
+Implemented and verified:
 
-- [ ] Chunked SISO Mamba inference/training.
-- [ ] State carry across chunks.
-- [ ] Episode reset.
-- [ ] Latency / peak-memory measurement.
-- [ ] Synthetic baseline training.
+- [x] Chunked SISO Mamba inference/training.
+- [x] State carry across chunks.
+- [x] Episode reset -- and made PER-ROW, which the original plan didn't
+  call for but real motion training (asynchronous per-sequence resets in a
+  batch) needs.
+- [x] Peak-memory measurement.
+- [ ] Latency measurement against a transformer baseline -- NOT done; do
+  this as part of Milestone B/C below, since it needs an actual ARDY
+  -shaped comparison to mean anything.
+- [x] Synthetic baseline training.
 
-It still cannot implement:
+Also implemented, going beyond what this section originally scoped for
+"after one step is verified" (validated in order: oracle memory shown to
+help BEFORE learned QKV work started, per Section 12's stage order):
+
+- [x] Learned State-QKV retrieval (Hit@1 ~99.8% on the research repo's
+  validated synthetic task).
+- [x] Long-horizon memory correction -- FIFO vs. Participative-eviction
+  comparison validated (2026-07-25): FIFO shows a hard capacity cliff,
+  Participative eliminates it out to 3.6x raw capacity.
+
+Still NOT implemented (unchanged from the original plan -- these are
+genuinely ARDY-side, not Mamba-side, work):
 
 - [ ] ARDY root/body replacement.
-- [ ] Cross-window Event Memory.
-- [ ] Learned State-QKV retrieval.
-- [ ] Long-horizon memory correction.
+- [ ] Cross-window Event Memory wired into ARDY's actual generation loop
+  (the Mamba-side primitives for this -- `write_mask`, `update_memory`,
+  per-row `reset_mask` -- exist and are unit-tested, but nothing calls them
+  from ARDY yet).
 
 ## 8. First ARDY Implementation Mode
 
@@ -369,25 +393,40 @@ shows a clear gain on long-horizon synthetic tasks.
 
 ## 13. Current Mamba-Side Progress
 
-Current status:
+**Corrected 2026-07-25.** Current status:
 
 ```text
 done: Mamba-3 state/chunk API audit
 done: SISO kernel smoke and basic forward/backward memory checks
-next: Mamba3ChunkWrapper.forward_chunk
-next: Phase-0 full-vs-chunk / reset / determinism tests
+done: Mamba3ChunkWrapper.forward_chunk (Phase-0 tests passing)
+done: StateProjector
+done: Event Memory (FIFO + Participative, unified, validated:
+      FIFO hard capacity cliff vs. Participative flat accuracy)
+done: learned State-QKV retrieval (~99.8% Hit@1 on validated synthetic task)
 not yet: ArdyMambaBlock
 not yet: ARDY root/body replacement
-not yet: cross-window Event Memory integration
+not yet: cross-window Event Memory integration INTO ARDY
 ```
+
+Code lives in `src/state_memory_operator/` in this repo, importable as
+`from state_memory_operator import StateTransitionMemoryOperator,
+StateMemoryOperatorConfig` (see `examples/quickstart.py`,
+`tests/test_smoke.py`).
 
 What this means for ARDY collaborators:
 
-- The interface contract is ready.
-- The first ARDY replacement target is clear.
-- The drop-in `ArdyMambaBlock` is not implemented yet.
+- The interface contract is ready AND the Mamba-side operator it describes
+  is now real, tested code -- not just a plan.
+- The first ARDY replacement target is clear (Section 3).
+- The drop-in `ArdyMambaBlock` is NOT implemented yet -- this is the actual
+  next step, not a formality; nothing in this repo has touched ARDY.
 - ARDY-side data, diffusion, motion representation, and export code should
-  remain unchanged until the Mamba block passes its own Phase-0 tests.
+  remain unchanged until `ArdyMambaBlock` passes its own drop-in tests
+  (Milestone B below).
+- Content/event-label design for motion (Section 9) is unstarted --
+  everything validated so far used discrete synthetic-vocabulary tasks, not
+  continuous motion latents. Don't assume the memory mechanism transfers to
+  motion content without that design work.
 
 ## 14. ARDY Integration Milestones
 
