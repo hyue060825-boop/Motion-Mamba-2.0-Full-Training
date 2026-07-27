@@ -1,9 +1,15 @@
 """Minimal end-to-end usage of the State-Transition Memory Operator.
 
-Run with:
+Run with local defaults:
 
 /home/plote/miniconda3/envs/env_isaaclab/bin/python \
     mamba_transformer_keneral/examples/quickstart.py
+
+Run on a server/workspace with explicit overlays:
+
+MAMBA_TRITON_OVERLAY=/path/to/triton_overlay \
+MAMBA_REPO=/path/to/state-spaces-mamba \
+CUDA_VISIBLE_DEVICES=0 python examples/quickstart.py
 
 This is a shape/wiring demo, not a training script -- it shows how to
 construct the operator, carry `OperatorState` + `EventMemory` across
@@ -13,13 +19,16 @@ actually being used (see `docs/mamba_integration_contract.md` Section 7).
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
 import torch
 
-TRITON_OVERLAY = "/tmp/mamba_op_triton"
-MAMBA_REPO = "/home/plote/mambamotion/basecode/mamba/state-spaces-mamba"
+TRITON_OVERLAY = os.environ.get("MAMBA_TRITON_OVERLAY", "/tmp/mamba_op_triton")
+MAMBA_REPO = os.environ.get(
+    "MAMBA_REPO", "/home/plote/mambamotion/basecode/mamba/state-spaces-mamba"
+)
 
 
 def main() -> int:
