@@ -104,12 +104,19 @@ Master checklist:
   Acceptance: learned retrieval beats random and approaches oracle behavior.
   Done: `src/state_memory_operator/state_qkv.py`, retrieval Hit@1 ~99.8% in
   the research repo's validated configuration.
-- [ ] **Implement ARDY-compatible `ArdyMambaBlock`.**
+- [x] **Implement ARDY-compatible `ArdyMambaBlock`.**
   Acceptance: same call signature as ARDY `TransformerEncoderBlock`; output
-  shapes match `root_model` and `body_model` requirements. NOT started.
-- [ ] **Pass ARDY drop-in smoke tests.**
+  shapes match `root_model` and `body_model` requirements. Done (2026-07-27):
+  `src/ardy_adapter/ardy_mamba_block.py`.
+- [x] **Pass ARDY drop-in smoke tests** (partial -- see caveats).
   Acceptance: single denoising step, one autoregressive window, short sample,
-  and G1 export path run with the Mamba block. NOT started.
+  and G1 export path run with the Mamba block. Single denoising step and one
+  autoregressive window PASS on the real "core" checkpoint (real
+  `model.__call__`, real weights, both `root_model`/`body_model` swapped):
+  `SINGLE_WINDOW_SMOKE_OK`, output `(1, 40, 330)`, finite. Short-sample NPZ
+  export and the G1 MuJoCo `.csv` path were NOT exercised with the Mamba
+  block (only with the original transformer block, during Milestone A).
+  Full record: `/data3/zts/log/2026-07-27_ardy_mamba_block_milestone_b.md`.
 - [ ] **Add cross-window state/memory for ARDY.**
   Acceptance: memory is read during denoising and committed only after the
   final clean/generated window. NOT started -- `write_mask` on
@@ -132,8 +139,13 @@ Current status checklist:
 - [x] Event Memory is implemented (FIFO + Participative, unified, with
   per-row async reset and compaction).
 - [x] Learned State-QKV retrieval is implemented and validated.
-- [ ] `ArdyMambaBlock` does not exist yet.
-- [ ] No ARDY-side integration work has started.
+- [x] `ArdyMambaBlock` exists (`src/ardy_adapter/`) and passes shape/mask/
+  backward/single-window smoke tests on the real "core" checkpoint on the
+  server GPU.
+- [ ] Cross-window Event Memory is NOT wired into ARDY's generation loop yet
+  (Milestone D) -- this smoke test used the stateless single-window path.
+- [ ] Training (Milestone C) has not started -- current `ArdyMambaBlock`
+  weights are random init; motion quality is not yet meaningful.
 
 What collaborators can rely on now:
 

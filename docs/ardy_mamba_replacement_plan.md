@@ -239,11 +239,12 @@ genuinely ARDY-side, not Mamba-side, work):
   per-row `reset_mask` -- exist and are unit-tested, but nothing calls them
   from ARDY yet).
 
-## 8. First ARDY Implementation Mode
+## 8. First ARDY Implementation Mode -- DONE (2026-07-27)
 
-First version: **stateless denoiser-block replacement**.
+First version: **stateless denoiser-block replacement**. Implemented:
+`src/ardy_adapter/ardy_mamba_block.py` in this repo.
 
-Keep the ARDY windowing and diffusion loop unchanged. Replace:
+Keep the ARDY windowing and diffusion loop unchanged. Replaced:
 
 ```python
 self.root_model = TransformerEncoderBlock(...)
@@ -257,23 +258,53 @@ self.root_model = ArdyMambaBlock(...)
 self.body_model = ArdyMambaBlock(...)
 ```
 
-The first Mamba block should:
+The first Mamba block:
 
-- [ ] Build the same prefix tokens as `TransformerEncoderBlock`.
-- [ ] Concatenate prefix + motion tokens.
-- [ ] Run a SISO Mamba-3 sequence mixer.
-- [ ] Return only the motion-token outputs.
-- [ ] Project to `output_dim`.
+- [x] Builds the same prefix tokens as `TransformerEncoderBlock` (imports
+  and reuses its own `embed_text`/`embed_timestep`/positional-encoding
+  components rather than reimplementing them).
+- [x] Concatenates prefix + motion tokens.
+- [x] Runs a stack of causal Mamba-3 layers (via
+  `state_memory_operator.Mamba3ChunkWrapper`), each wrapped in residual +
+  LayerNorm.
+- [x] Returns only the motion-token outputs.
+- [x] Projects to `output_dim`.
+
+Validated on the server (GPU, real "core" checkpoint, real
+`ardy.model.load_model` + real generation call path, not a hand-rolled
+approximation):
+
+- [x] Shape parity (root + body stage, real denoiser config values).
+- [x] Mask parity (padded tokens don't crash).
+- [x] Backward pass (gradients finite, reach input and first Mamba layer).
+- [x] Single denoising step + one autoregressive window with BOTH
+  `root_model` and `body_model` swapped: `SINGLE_WINDOW_SMOKE_OK`, output
+  `(1, 40, 330)`, all finite. Random-init weights, so motion quality is
+  expected garbage -- this validates the structural claim only (see
+  Section 14 Milestone B below for the full record).
 
 This version answers:
 
 ```text
 Can Mamba replace ARDY's transformer denoiser block without breaking generation?
+    YES, structurally -- confirmed 2026-07-27 (see Section 14, Milestone B).
 Does it reduce latency or memory for the same ARDY window?
+    NOT YET MEASURED -- no head-to-head timing/memory comparison exists yet.
 Can it train on the same denoising target?
+    NOT YET TESTED -- Milestone C, next.
 ```
 
-It does not yet solve long-horizon memory.
+**Known first-version simplifications, not yet resolved** (see the module
+docstring in `ardy_mamba_block.py` for full detail): the mixer is causal,
+not bidirectional, within a window (a real representational difference
+from the original self-attention, which the empirical test above is
+exactly meant to probe); padding is handled by zeroing content rather than
+true attention-style masking (checked to not crash, not checked against
+ARDY's real batch-padding convention at scale); no checkpoint weight
+sharing with the original block (fresh random init -- needs its own
+training, Milestone C).
+
+It does not yet solve long-horizon memory (Milestone D, separate).
 
 ## 9. After ARDY Drop-In Block Is Verified
 
@@ -430,7 +461,7 @@ What this means for ARDY collaborators:
 
 ## 14. ARDY Integration Milestones
 
-### Milestone A: Read-only ARDY baseline
+### Milestone A: Read-only ARDY baseline -- DONE (2026-07-27)
 
 Run ARDY generation without modifying ARDY:
 
@@ -441,28 +472,44 @@ scripts/interactive_demo/generation.py
 
 Checklist:
 
-- [ ] Run unmodified ARDY generation.
-- [ ] Record model name.
-- [ ] Record duration.
-- [ ] Record diffusion steps.
-- [ ] Record history frames.
-- [ ] Record generation time.
-- [ ] Record peak GPU memory.
-- [ ] Record output `.npz` / `.csv` path.
+- [x] Run unmodified ARDY generation (Core and G1 models).
+- [x] Record model name (`core` / `g1`, released
+  `ARDY-Core-RP-20FPS-Horizon40` / `ARDY-G1-RP-25FPS-Horizon52`).
+- [x] Record duration (1.0s smoke; up to 4.0s for later action sets).
+- [x] Record diffusion steps (1 for initial smoke; 4/8/10 for later sets).
+- [ ] Record history frames explicitly (not isolated as its own number).
+- [ ] Record generation time (console progress observed, not instrumented
+  as a clean wall-clock number -- do a timed run before quoting speed).
+- [ ] Record peak GPU memory (not captured in this pass).
+- [x] Record output `.npz` / `.csv` path -- see
+  `/data3/zts/results/ardy_smoke/` and `/data3/zts/results/ardy_smoke/actions_g1/`
+  on the server (multiple prompts, both Core and G1, G1 CSVs are the MuJoCo
+  qpos export). Full detail: `mamba_project/logs/daily/2026-07-27.md`.
 
-### Milestone B: Drop-in Mamba denoiser block
+### Milestone B: Drop-in Mamba denoiser block -- DONE (2026-07-27)
 
-Implement `ArdyMambaBlock` with the same forward signature as
-`TransformerEncoderBlock`.
+Implemented `ArdyMambaBlock` with the same forward signature as
+`TransformerEncoderBlock` (`src/ardy_adapter/ardy_mamba_block.py`).
 
 Validation checklist:
 
-- [ ] Shape parity: root output and body output match ARDY expected shapes.
-- [ ] Mask parity: valid/padded tokens do not crash.
-- [ ] Single denoising step runs.
-- [ ] One autoregressive window runs.
-- [ ] Short generation sample writes `.npz`.
-- [ ] G1 sample writes MuJoCo `.csv`.
+- [x] Shape parity: root output and body output match ARDY expected shapes
+  (real denoiser config: `latent_dim=1024`, `num_layers=8`).
+- [x] Mask parity: valid/padded tokens do not crash.
+- [x] Single denoising step runs (real "core" checkpoint, real
+  `model.__call__` path, not simulated).
+- [x] One autoregressive window runs (40 frames = `gen_horizon_len`,
+  output `(1, 40, 330)`, all finite).
+- [ ] Short generation sample writes `.npz` -- the smoke test used the raw
+  tensor output directly and did not run it through
+  `model.motion_rep.inverse` / NPZ export; do this next if a saved sample
+  is needed (motion will be low-quality garbage regardless, given random
+  Mamba init -- not useful evidence until Milestone C training happens).
+- [ ] G1 sample writes MuJoCo `.csv` -- NOT tested; only the "core" model
+  was used for this milestone.
+
+Full record: `/data3/zts/log/2026-07-27_ardy_mamba_block_milestone_b.md`
+(server) and `mamba_project/logs/daily/2026-07-27.md` (control repo).
 
 ### Milestone C: Basic training
 
