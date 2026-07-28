@@ -113,10 +113,16 @@ Master checklist:
   and G1 export path run with the Mamba block. Single denoising step and one
   autoregressive window PASS on the real "core" checkpoint (real
   `model.__call__`, real weights, both `root_model`/`body_model` swapped):
-  `SINGLE_WINDOW_SMOKE_OK`, output `(1, 40, 330)`, finite. Short-sample NPZ
-  export and the G1 MuJoCo `.csv` path were NOT exercised with the Mamba
-  block (only with the original transformer block, during Milestone A).
-  Full record: `/data3/zts/log/2026-07-27_ardy_mamba_block_milestone_b.md`.
+  `SINGLE_WINDOW_SMOKE_OK`, output `(1, 40, 330)`, finite, verified to
+  genuinely differ from the original transformer's output
+  (`max_abs_diff=10.75`) -- a first version of this test swapped through
+  the CFG wrapper instead of the raw denoiser and produced a false
+  -positive no-op "pass"; fixed and re-verified, see
+  `/data3/zts/log/2026-07-27_ardy_mamba_block_milestone_b_correction.md`.
+  Short-sample NPZ export and the G1 MuJoCo `.csv` path were NOT exercised
+  with the Mamba block (only with the original transformer block, during
+  Milestone A). Full record:
+  `/data3/zts/log/2026-07-27_ardy_mamba_block_milestone_b.md`.
 - [ ] **Add cross-window state/memory for ARDY.**
   Acceptance: memory is read during denoising and committed only after the
   final clean/generated window. NOT started -- `write_mask` on

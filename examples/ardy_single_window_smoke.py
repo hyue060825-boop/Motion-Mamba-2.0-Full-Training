@@ -55,7 +55,19 @@ def main() -> int:
     model = load_model(resolved_model, device=device, checkpoints_dir=checkpoints_dir)
     print("Loaded.")
 
-    denoiser = model.denoiser
+    # IMPORTANT: model.denoiser is the CFG wrapper
+    # (AutoLatentClassifierFreeGuidedModelSeparated), not the raw denoiser.
+    # Its __getattr__ delegates unresolved lookups to self.model (the real
+    # AutoLatentTwostageDenoiser), which is why `model.denoiser.root_model`
+    # appears to work for READS -- but ASSIGNING `model.denoiser.root_model =
+    # ...` creates a new, disconnected attribute on the WRAPPER itself
+    # (nn.Module.__setattr__ registers it there), never touching
+    # `model.denoiser.model.root_model`, which is what forward() actually
+    # calls. An earlier version of this script assigned through the wrapper
+    # and got a false-positive "it works" result: the swap was a no-op, and
+    # the smoke test silently ran the ORIGINAL untouched transformer the
+    # whole time. Always go through `.model` explicitly.
+    denoiser = model.denoiser.model
     root_kwargs = dict(
         input_dim=-1,
         add_input_proj=False,
@@ -76,32 +88,23 @@ def main() -> int:
     mamba_body = ArdyMambaBlock(**body_kwargs).to(device)
 
     original_root, original_body = denoiser.root_model, denoiser.body_model
-    denoiser.root_model = mamba_root
-    denoiser.body_model = mamba_body
-    print("Swapped denoiser.root_model / denoiser.body_model -> ArdyMambaBlock.")
 
-    fps = model.motion_rep.fps
     gen_horizon_len = model.gen_horizon_len
     num_frames = gen_horizon_len  # exactly one autoregressive window
     text = "A person walks forward."
     num_samples = 1
+    print(f"Window: {num_frames} frames ({num_frames / model.motion_rep.fps:.2f}s at {model.motion_rep.fps}fps)")
 
-    seed_everything(0)
-    texts = [text] * num_samples
-    lengths = torch.tensor([num_frames] * num_samples, device=device)
-    pad_mask = length_to_mask(lengths)
-    first_heading_angle = torch.zeros(num_samples, device=device)
-
-    num_base_steps = int(model.diffusion.num_base_steps)
-    diffusion_steps = min(2, num_base_steps)  # minimal, this is a structural smoke test
-
-    print(
-        f"Generating {num_frames} frames ({num_frames / fps:.2f}s at {fps}fps), "
-        f"{diffusion_steps} denoising steps, ArdyMambaBlock active..."
-    )
-    try:
+    def _generate():
+        seed_everything(0)
+        texts = [text] * num_samples
+        lengths = torch.tensor([num_frames] * num_samples, device=device)
+        pad_mask = length_to_mask(lengths)
+        first_heading_angle = torch.zeros(num_samples, device=device)
+        num_base_steps = int(model.diffusion.num_base_steps)
+        diffusion_steps = min(2, num_base_steps)
         with torch.no_grad():
-            motion = model(
+            return model(
                 texts,
                 num_frames,
                 num_denoising_steps=diffusion_steps,
@@ -112,21 +115,46 @@ def main() -> int:
                 cfg_weight=(2.0, 2.0),
                 crop_history_length=None,
             )
-        print("SINGLE_WINDOW_SMOKE_OK")
-        print(f"motion output type={type(motion)}")
-        if hasattr(motion, "shape"):
-            print(f"motion shape={tuple(motion.shape)} dtype={motion.dtype} finite={torch.isfinite(motion).all().item()}")
-        elif isinstance(motion, dict):
-            for k, v in motion.items():
-                if hasattr(v, "shape"):
-                    print(f"  {k}: shape={tuple(v.shape)} finite={torch.isfinite(v).all().item() if v.is_floating_point() else 'n/a'}")
+
+    try:
+        print("Generating with the ORIGINAL transformer denoiser (baseline)...")
+        motion_baseline = _generate()
+        print(f"baseline motion shape={tuple(motion_baseline.shape)} finite={torch.isfinite(motion_baseline).all().item()}")
+
+        denoiser.root_model = mamba_root
+        denoiser.body_model = mamba_body
+        # Assert the swap actually took effect on the object forward() really
+        # calls (model.denoiser.model), not just on some disconnected
+        # attribute -- this is exactly the check that would have caught the
+        # earlier false-positive bug.
+        assert model.denoiser.model.root_model is mamba_root, "swap did not take effect on the real denoiser"
+        assert model.denoiser.model.body_model is mamba_body, "swap did not take effect on the real denoiser"
+        print("Swapped denoiser.root_model / denoiser.body_model -> ArdyMambaBlock (swap verified via identity assert).")
+
+        print("Generating with ArdyMambaBlock (random init -- expect garbage motion, structural test only)...")
+        motion_mamba = _generate()
+        print(f"mamba motion shape={tuple(motion_mamba.shape)} finite={torch.isfinite(motion_mamba).all().item()}")
+
+        if motion_mamba.shape != motion_baseline.shape:
+            print("SINGLE_WINDOW_SMOKE_FAILED: shape mismatch between baseline and Mamba runs")
+            return 1
+
+        max_abs_diff = (motion_mamba.float() - motion_baseline.float()).abs().max().item()
+        print(f"max_abs_diff(baseline, mamba) = {max_abs_diff:.6f}")
+        if max_abs_diff < 1e-6:
+            print(
+                "SINGLE_WINDOW_SMOKE_FAILED: Mamba output is IDENTICAL to baseline -- "
+                "the swap almost certainly did not take effect."
+            )
+            return 1
+
+        print("SINGLE_WINDOW_SMOKE_OK (swap verified by identity assert AND by output actually differing from baseline)")
+        return 0
     except Exception as e:
         print(f"SINGLE_WINDOW_SMOKE_FAILED: {type(e).__name__}: {e}")
         raise
     finally:
         denoiser.root_model, denoiser.body_model = original_root, original_body
-
-    return 0
 
 
 if __name__ == "__main__":

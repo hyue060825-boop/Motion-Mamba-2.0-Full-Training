@@ -279,9 +279,23 @@ approximation):
 - [x] Backward pass (gradients finite, reach input and first Mamba layer).
 - [x] Single denoising step + one autoregressive window with BOTH
   `root_model` and `body_model` swapped: `SINGLE_WINDOW_SMOKE_OK`, output
-  `(1, 40, 330)`, all finite. Random-init weights, so motion quality is
+  `(1, 40, 330)`, all finite, and (after a correction -- see below)
+  verified to genuinely differ from the original transformer's output
+  (`max_abs_diff=10.75`). Random-init weights, so motion quality is
   expected garbage -- this validates the structural claim only (see
   Section 14 Milestone B below for the full record).
+
+  **Correction (same day)**: the first version of this test swapped
+  `model.denoiser.root_model` where `model.denoiser` is the CFG wrapper
+  (`AutoLatentClassifierFreeGuidedModelSeparated`), not the raw denoiser.
+  The wrapper's `__getattr__` delegates READS to the raw denoiser
+  (`self.model`), making the swap LOOK like it worked, but the assignment
+  itself created a disconnected attribute on the wrapper -- `forward()`
+  still called the original, untouched transformer the whole time. Fixed
+  to swap through `model.denoiser.model` instead, and added an identity
+  assert + a baseline-vs-Mamba output-difference check so a future no-op
+  swap can't pass silently again. Full note:
+  `/data3/zts/log/2026-07-27_ardy_mamba_block_milestone_b_correction.md`.
 
 This version answers:
 
