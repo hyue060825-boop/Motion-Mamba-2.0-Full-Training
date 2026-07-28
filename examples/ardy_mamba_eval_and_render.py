@@ -177,6 +177,15 @@ def main() -> int:
         for prompt_name, prompt_text in prompts:
             print(f"Generating [{variant_name}] x [{prompt_name}]: {prompt_text!r}")
             output = generate(prompt_text)
+            # Squeeze the batch dim like scripts/generate.py's _select_sample
+            # does before saving -- ARDY's own scripts/visualize.py expects
+            # per-sample arrays (posed_joints: (T, J, 3)), not a batch axis
+            # (T here would be misread as a joint count and crash the
+            # skeleton lookup).
+            output = {
+                k: (v[0] if hasattr(v, "shape") and len(v.shape) > 0 and v.shape[0] == 1 else v)
+                for k, v in output.items()
+            }
             stem = f"{variant_name}_{prompt_name}"
             npz_path = out_dir / f"{stem}.npz"
             arrays = {k: np.asarray(v) for k, v in output.items()}
@@ -184,7 +193,7 @@ def main() -> int:
             arrays["text"] = np.asarray(prompt_text)
             np.savez(npz_path, **arrays)
             mp4_path = out_dir / f"{stem}.mp4"
-            render_mp4(output["posed_joints"][0], joint_parents, fps, mp4_path, f"{variant_name}: {prompt_text}")
+            render_mp4(output["posed_joints"], joint_parents, fps, mp4_path, f"{variant_name}: {prompt_text}")
             print(f"  saved {npz_path.name}, {mp4_path.name}")
 
     raw_denoiser.root_model, raw_denoiser.body_model = original_root, original_body
