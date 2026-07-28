@@ -543,16 +543,35 @@ Checklist:
   https://wandb.ai/2980976495-peking-university/ardy-mamba-distill/runs/8yjvnr43
 - [ ] Record peak GPU memory (not captured in this pass).
 - [ ] Record tokens/sec or windows/sec (not captured in this pass).
-- [ ] Record short qualitative generation with the TRAINED checkpoint
-  through the real multi-step `model.__call__` path -- this run only
-  validated the single-step training objective, not full sampled
-  generation with the trained weights.
-- [ ] Compare to transformer denoiser under same settings -- not done;
-  needs held-out (non-memorized) prompts, since 16 samples / 117M
-  trainable params is almost certainly memorization, not generalization.
+- [x] Record short qualitative generation with the TRAINED checkpoint
+  through the real multi-step `model.__call__` path (`examples/ardy_mamba_eval_and_render.py`):
+  generated + rendered (custom matplotlib/imageio stick-figure MP4s, since
+  ARDY's own `scripts/visualize.py` is an interactive viser viewer, not a
+  file exporter) on one TRAINING prompt ("A person jumps.") and one
+  HELD-OUT prompt not in the distillation set ("A person dances happily."),
+  for both the teacher and the trained Mamba blocks.
+- [x] Compare to transformer denoiser under same settings (qualitative,
+  spot-checked frames only -- not a rigorous quantitative comparison yet):
+  teacher looks coherent on both prompts (expected). Trained Mamba looks
+  structurally plausible on BOTH prompts at the frames checked (correct
+  proportions, no NaN/degenerate joints) -- one mid-sequence frame on the
+  held-out prompt showed crossed legs, but start/end frames of that same
+  clip are clean upright poses, consistent with a normal stepping/turning
+  transition rather than a failure. This is NOT strong evidence of
+  generalization (3 spot-checked frames, one held-out prompt, no
+  quantitative metric) -- it only rules out gross breakage. A real
+  generalization claim needs the items below.
+  Videos: `results/videos/2026-07-28_ardy_mamba_eval/` (control repo,
+  gitignored -- not committed, per the "no large media in git" rule).
 
 Full record:
 `/data3/zts/log/2026-07-27_ardy_mamba_distill_milestone_c_first_run.md`.
+
+**Remaining for a rigorous Milestone C**: quantitative joint-position
+error / motion-quality metric against the teacher on a larger held-out
+prompt set (not just one), peak-memory and throughput numbers, and a
+larger/more diverse pseudo-dataset to reduce the memorization concern
+before treating any generalization claim as established.
 
 ### Milestone D: Cross-window state/memory
 
