@@ -43,7 +43,11 @@ MAMBA_TRITON_OVERLAY=/data3/zts/packages/mamba_op_triton \
 MAMBA_REPO=/data3/zts/packages/state-spaces-mamba \
 PYTHONPATH=/data3/zts/ardy \
 /data3/zts/conda_envs/ardy_env/bin/python \
-    examples/train_ardy_mamba_distill.py --steps 2000 --wandb-project ardy-mamba-distill
+    examples/train_ardy_mamba_distill.py \
+    --steps 4000 \
+    --prompts-file configs/ardy_mamba_distill_prompts_v2.txt \
+    --ckpt-dir /data3/zts/results/ardy_mamba_distill_v2 \
+    --wandb-project ardy-mamba-distill
 """
 
 from __future__ import annotations
@@ -79,15 +83,31 @@ PROMPTS = [
 ]
 
 
-def build_pseudo_dataset(model, device, num_denoising_steps: int | None = None):
+def load_prompts(path: str | None, max_prompts: int | None = None) -> list[str]:
+    if path is None:
+        prompts = list(PROMPTS)
+    else:
+        prompt_path = Path(path)
+        prompts = [line.strip() for line in prompt_path.read_text().splitlines()]
+        prompts = [p for p in prompts if p and not p.startswith("#")]
+        if not prompts:
+            raise ValueError(f"No prompts found in {prompt_path}")
+    if max_prompts is not None:
+        if max_prompts < 1:
+            raise ValueError(f"--max-prompts must be >= 1, got {max_prompts}")
+        prompts = prompts[:max_prompts]
+    return prompts
+
+
+def build_pseudo_dataset(model, device, prompts: list[str], num_denoising_steps: int | None = None):
     """One clean hybrid-motion x_0 per prompt in PROMPTS, generated with the
     FROZEN original transformer denoiser at (near-)full quality. Returns a
     list of dicts: {x0, text_feat, text_pad_mask, first_heading_angle}."""
     from ardy.model.ardy_model import get_three_mask_from_len  # noqa: F401 (parity import, unused here)
 
     num_denoising_steps = num_denoising_steps or int(model.diffusion.num_base_steps)
-    batch_size = len(PROMPTS)
-    text_feat, text_pad_mask = model._encode_text(PROMPTS)
+    batch_size = len(prompts)
+    text_feat, text_pad_mask = model._encode_text(prompts)
     gen_horizon_len = model.gen_horizon_len
     first_heading_angle = torch.zeros(batch_size, device=device)
     global_transl = torch.zeros((batch_size, model.motion_rep.nfeats_dict["root_pos"]), device=device)
@@ -178,6 +198,9 @@ def main() -> int:
     parser.add_argument("--wandb-project", default="ardy-mamba-distill")
     parser.add_argument("--wandb-mode", default="online", choices=["online", "offline", "disabled"])
     parser.add_argument("--dataset-denoising-steps", type=int, default=None)
+    parser.add_argument("--prompts-file", default=None)
+    parser.add_argument("--max-prompts", type=int, default=None)
+    parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
 
     if not torch.cuda.is_available():
@@ -193,19 +216,22 @@ def main() -> int:
     from ardy.model import DEFAULT_MODEL, load_model
     from ardy.model.loading import get_env_var
     from ardy.model.registry import resolve_model_name
+    from ardy.tools import seed_everything
 
     from ardy_adapter import ArdyMambaBlock
 
     device = "cuda:0"
+    seed_everything(args.seed)
+    prompts = load_prompts(args.prompts_file, args.max_prompts)
     checkpoints_dir = get_env_var("CHECKPOINTS_DIR")
     resolved_model = resolve_model_name(DEFAULT_MODEL, checkpoints_dir=checkpoints_dir)
     print(f"Loading {resolved_model} ...")
     model = load_model(resolved_model, device=device, checkpoints_dir=checkpoints_dir)
     print("Loaded.")
 
-    print(f"Bootstrapping pseudo-dataset from the frozen teacher ({len(PROMPTS)} prompts, "
+    print(f"Bootstrapping pseudo-dataset from the frozen teacher ({len(prompts)} prompts, "
           f"{args.dataset_denoising_steps or int(model.diffusion.num_base_steps)} denoising steps)...")
-    dataset = build_pseudo_dataset(model, device, args.dataset_denoising_steps)
+    dataset = build_pseudo_dataset(model, device, prompts, args.dataset_denoising_steps)
     print(f"x0 shape: {tuple(dataset['x0'].shape)}")
 
     # -- swap in ArdyMambaBlock, freeze everything else --
@@ -255,7 +281,9 @@ def main() -> int:
             "batch_size": args.batch_size,
             "lr": args.lr,
             "num_layers": 8,
-            "num_prompts": len(PROMPTS),
+            "num_prompts": len(prompts),
+            "prompts_file": args.prompts_file,
+            "seed": args.seed,
             "trainable_params": n_trainable,
             "model": resolved_model,
         },
@@ -282,7 +310,16 @@ def main() -> int:
         if args.ckpt_every and (step % args.ckpt_every == 0 and step > 0 or step == args.steps - 1):
             ckpt_path = Path(args.ckpt_dir) / f"mamba_blocks_step{step}.pt"
             torch.save(
-                {"root_model": mamba_root.state_dict(), "body_model": mamba_body.state_dict(), "step": step},
+                {
+                    "root_model": mamba_root.state_dict(),
+                    "body_model": mamba_body.state_dict(),
+                    "step": step,
+                    "prompts": prompts,
+                    "prompts_file": args.prompts_file,
+                    "seed": args.seed,
+                    "dataset_denoising_steps": args.dataset_denoising_steps,
+                    "model": resolved_model,
+                },
                 ckpt_path,
             )
             print(f"Saved checkpoint to {ckpt_path}")
