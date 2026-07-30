@@ -207,6 +207,17 @@ def training_step(raw_denoiser, diffusion, batch, idx, gen_horizon_len, device):
     return loss
 
 
+@torch.no_grad()
+def eval_loss(raw_denoiser, diffusion, batch, gen_horizon_len, device, batch_size: int = 8) -> float:
+    losses = []
+    n_samples = batch["x0"].shape[0]
+    for start in range(0, n_samples, batch_size):
+        idx = torch.arange(start, min(start + batch_size, n_samples), device=device)
+        loss = training_step(raw_denoiser, diffusion, batch, idx, gen_horizon_len, device)
+        losses.append(loss.detach())
+    return float(torch.stack(losses).mean().item())
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--steps", type=int, default=2000)
@@ -220,6 +231,9 @@ def main() -> int:
     parser.add_argument("--dataset-denoising-steps", type=int, default=None)
     parser.add_argument("--dataset-prompt-batch-size", type=int, default=64)
     parser.add_argument("--prompts-file", default=None)
+    parser.add_argument("--eval-prompts-file", default=None)
+    parser.add_argument("--eval-every", type=int, default=500)
+    parser.add_argument("--eval-batch-size", type=int, default=8)
     parser.add_argument("--max-prompts", type=int, default=None)
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
@@ -244,6 +258,7 @@ def main() -> int:
     device = "cuda:0"
     seed_everything(args.seed)
     prompts = load_prompts(args.prompts_file, args.max_prompts)
+    eval_prompts = load_prompts(args.eval_prompts_file, None) if args.eval_prompts_file else []
     checkpoints_dir = get_env_var("CHECKPOINTS_DIR")
     resolved_model = resolve_model_name(DEFAULT_MODEL, checkpoints_dir=checkpoints_dir)
     print(f"Loading {resolved_model} ...", flush=True)
@@ -260,6 +275,21 @@ def main() -> int:
         prompt_batch_size=args.dataset_prompt_batch_size,
     )
     print(f"x0 shape: {tuple(dataset['x0'].shape)}", flush=True)
+    eval_dataset = None
+    if eval_prompts:
+        print(
+            f"Bootstrapping heldout pseudo-dataset from the frozen teacher ({len(eval_prompts)} prompts, "
+            f"{args.dataset_denoising_steps or int(model.diffusion.num_base_steps)} denoising steps)...",
+            flush=True,
+        )
+        eval_dataset = build_pseudo_dataset(
+            model,
+            device,
+            eval_prompts,
+            args.dataset_denoising_steps,
+            prompt_batch_size=args.dataset_prompt_batch_size,
+        )
+        print(f"eval x0 shape: {tuple(eval_dataset['x0'].shape)}", flush=True)
 
     # -- swap in ArdyMambaBlock, freeze everything else --
     raw_denoiser = model.denoiser.model  # see Milestone B correction: NOT model.denoiser directly
@@ -310,6 +340,8 @@ def main() -> int:
             "num_layers": 8,
             "num_prompts": len(prompts),
             "prompts_file": args.prompts_file,
+            "eval_prompts_file": args.eval_prompts_file,
+            "num_eval_prompts": len(eval_prompts),
             "seed": args.seed,
             "dataset_prompt_batch_size": args.dataset_prompt_batch_size,
             "trainable_params": n_trainable,
@@ -335,6 +367,22 @@ def main() -> int:
             print(f"step {step}: loss={loss.item():.6f} grad_norm={grad_norm.item():.4f}", flush=True)
             wandb.log({"loss": loss.item(), "grad_norm": grad_norm.item(), "step": step})
 
+        if eval_dataset is not None and args.eval_every and (step % args.eval_every == 0 or step == args.steps - 1):
+            mamba_root.eval()
+            mamba_body.eval()
+            val_loss = eval_loss(
+                raw_denoiser,
+                model.diffusion,
+                eval_dataset,
+                model.gen_horizon_len,
+                device,
+                batch_size=args.eval_batch_size,
+            )
+            mamba_root.train()
+            mamba_body.train()
+            print(f"step {step}: val_loss={val_loss:.6f}", flush=True)
+            wandb.log({"val_loss": val_loss, "step": step})
+
         if args.ckpt_every and (step % args.ckpt_every == 0 and step > 0 or step == args.steps - 1):
             ckpt_path = Path(args.ckpt_dir) / f"mamba_blocks_step{step}.pt"
             torch.save(
@@ -343,7 +391,9 @@ def main() -> int:
                     "body_model": mamba_body.state_dict(),
                     "step": step,
                     "prompts": prompts,
+                    "eval_prompts": eval_prompts,
                     "prompts_file": args.prompts_file,
+                    "eval_prompts_file": args.eval_prompts_file,
                     "seed": args.seed,
                     "dataset_denoising_steps": args.dataset_denoising_steps,
                     "dataset_prompt_batch_size": args.dataset_prompt_batch_size,
