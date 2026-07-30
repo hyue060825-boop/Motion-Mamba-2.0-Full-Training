@@ -74,13 +74,38 @@ docs/mamba_integration_contract.md
 docs/ardy_mamba_replacement_plan.md
 ```
 
+## ARDY Mamba Viser Path
+
+For interactive visualization, do not use the MP4 render helper. Generate a
+normal ARDY `.npz` with the trained Mamba denoiser blocks, then open that file
+with ARDY's own `scripts/visualize.py` viser viewer:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 \
+CHECKPOINTS_DIR=/path/to/ardy/checkpoints \
+MAMBA_TRITON_OVERLAY=/path/to/mamba_op_triton \
+MAMBA_REPO=/path/to/state-spaces-mamba \
+python examples/ardy_mamba_generate_for_viser.py \
+    --checkpoint /path/to/mamba_blocks_step1999.pt \
+    --prompt "A person jumps." \
+    --output /tmp/ardy_mamba_vis/jump \
+    --launch-viser --port 2334
+```
+
+Then open:
+
+```text
+http://localhost:2334
+```
+
 Progress is tracked with `[ ]` / `[x]` checklists in those docs -- keep them
 honest: update a box only when its stated acceptance criterion has actually
 been verified, and correct it immediately if you find it's gone stale (this
 happened once already, 2026-07-20 -> 2026-07-25, and cost real confusion).
 
-**Current stage: Level 2 (chunk wrapper + state projector + Event Memory +
-learned State-QKV all implemented and validated) on synthetic
-associative-recall tasks only.** `ArdyMambaBlock` and all ARDY-side
-integration work are NOT started -- see `ardy_mamba_replacement_plan.md`
-Section 6 for the actual next step. MIMO/CUTE remain later-stage work.
+**Current stage: Mamba-side Level 2 operator is implemented, and the first
+ARDY denoiser replacement path has reached Milestone C.** `ArdyMambaBlock`
+exists as a drop-in root/body denoiser block replacement, a first distillation
+checkpoint has been evaluated, and interactive viewing should go through the
+`.npz` + ARDY viser path above. MIMO/CUTE and cross-window recurrent memory in
+ARDY remain later-stage work.
