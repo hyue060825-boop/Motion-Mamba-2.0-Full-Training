@@ -143,6 +143,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--diffusion-steps", type=int, default=None)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--save-npz", action="store_true")
+    parser.add_argument("--no-warmup", action="store_true", help="Disable one unmeasured teacher/Mamba warmup run.")
     return parser.parse_args()
 
 
@@ -234,6 +235,13 @@ def main() -> int:
 
     rows: list[dict[str, Any]] = []
     try:
+        if not args.no_warmup:
+            warmup_prompt = prompts[0]
+            warmup_seed = args.seed - 1
+            print(f"Warmup, not recorded: {warmup_prompt!r}")
+            generate(warmup_prompt, original_root, original_body, warmup_seed)
+            generate(warmup_prompt, mamba_root, mamba_body, warmup_seed)
+
         for i, prompt in enumerate(prompts):
             seed = args.seed + i
             print(f"[{i + 1}/{len(prompts)}] {prompt!r}")
