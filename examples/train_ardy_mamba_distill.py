@@ -99,46 +99,66 @@ def load_prompts(path: str | None, max_prompts: int | None = None) -> list[str]:
     return prompts
 
 
-def build_pseudo_dataset(model, device, prompts: list[str], num_denoising_steps: int | None = None):
+def build_pseudo_dataset(
+    model,
+    device,
+    prompts: list[str],
+    num_denoising_steps: int | None = None,
+    prompt_batch_size: int = 64,
+):
     """One clean hybrid-motion x_0 per prompt in PROMPTS, generated with the
     FROZEN original transformer denoiser at (near-)full quality. Returns a
     list of dicts: {x0, text_feat, text_pad_mask, first_heading_angle}."""
     from ardy.model.ardy_model import get_three_mask_from_len  # noqa: F401 (parity import, unused here)
 
     num_denoising_steps = num_denoising_steps or int(model.diffusion.num_base_steps)
-    batch_size = len(prompts)
-    text_feat, text_pad_mask = model._encode_text(prompts)
     gen_horizon_len = model.gen_horizon_len
-    first_heading_angle = torch.zeros(batch_size, device=device)
-    global_transl = torch.zeros((batch_size, model.motion_rep.nfeats_dict["root_pos"]), device=device)
-
     num_denoising_steps_t = torch.tensor([num_denoising_steps], device=device)
     use_timesteps = model.diffusion.space_timesteps(num_denoising_steps_t[0])[0]
     model.diffusion.calc_diffusion_vars(use_timesteps)
     indices = list(range(num_denoising_steps))[::-1]
 
-    with torch.no_grad():
-        x0 = model._generate_window(
-            None,
-            global_transl,
-            0,
-            0,
-            gen_horizon_len,
-            text_feat,
-            text_pad_mask,
-            first_heading_angle,
-            None,
-            None,
-            num_denoising_steps_t,
-            (2.0, 2.0),
-            indices,
+    chunks = []
+    if prompt_batch_size < 1:
+        raise ValueError(f"prompt_batch_size must be >= 1, got {prompt_batch_size}")
+
+    for start in range(0, len(prompts), prompt_batch_size):
+        prompt_chunk = prompts[start : start + prompt_batch_size]
+        batch_size = len(prompt_chunk)
+        print(f"  teacher chunk {start // prompt_batch_size + 1}: prompts {start}-{start + batch_size - 1}", flush=True)
+        text_feat, text_pad_mask = model._encode_text(prompt_chunk)
+        first_heading_angle = torch.zeros(batch_size, device=device)
+        global_transl = torch.zeros((batch_size, model.motion_rep.nfeats_dict["root_pos"]), device=device)
+        with torch.no_grad():
+            x0 = model._generate_window(
+                None,
+                global_transl,
+                0,
+                0,
+                gen_horizon_len,
+                text_feat,
+                text_pad_mask,
+                first_heading_angle,
+                None,
+                None,
+                num_denoising_steps_t,
+                (2.0, 2.0),
+                indices,
+            )
+        chunks.append(
+            {
+                "x0": x0.detach(),
+                "text_feat": text_feat.detach(),
+                "text_pad_mask": text_pad_mask.detach(),
+                "first_heading_angle": first_heading_angle.detach(),
+            }
         )
 
     return {
-        "x0": x0.detach(),
-        "text_feat": text_feat.detach(),
-        "text_pad_mask": text_pad_mask.detach(),
-        "first_heading_angle": first_heading_angle.detach(),
+        "x0": torch.cat([chunk["x0"] for chunk in chunks], dim=0),
+        "text_feat": torch.cat([chunk["text_feat"] for chunk in chunks], dim=0),
+        "text_pad_mask": torch.cat([chunk["text_pad_mask"] for chunk in chunks], dim=0),
+        "first_heading_angle": torch.cat([chunk["first_heading_angle"] for chunk in chunks], dim=0),
     }
 
 
@@ -198,6 +218,7 @@ def main() -> int:
     parser.add_argument("--wandb-project", default="ardy-mamba-distill")
     parser.add_argument("--wandb-mode", default="online", choices=["online", "offline", "disabled"])
     parser.add_argument("--dataset-denoising-steps", type=int, default=None)
+    parser.add_argument("--dataset-prompt-batch-size", type=int, default=64)
     parser.add_argument("--prompts-file", default=None)
     parser.add_argument("--max-prompts", type=int, default=None)
     parser.add_argument("--seed", type=int, default=0)
@@ -225,14 +246,20 @@ def main() -> int:
     prompts = load_prompts(args.prompts_file, args.max_prompts)
     checkpoints_dir = get_env_var("CHECKPOINTS_DIR")
     resolved_model = resolve_model_name(DEFAULT_MODEL, checkpoints_dir=checkpoints_dir)
-    print(f"Loading {resolved_model} ...")
+    print(f"Loading {resolved_model} ...", flush=True)
     model = load_model(resolved_model, device=device, checkpoints_dir=checkpoints_dir)
-    print("Loaded.")
+    print("Loaded.", flush=True)
 
     print(f"Bootstrapping pseudo-dataset from the frozen teacher ({len(prompts)} prompts, "
-          f"{args.dataset_denoising_steps or int(model.diffusion.num_base_steps)} denoising steps)...")
-    dataset = build_pseudo_dataset(model, device, prompts, args.dataset_denoising_steps)
-    print(f"x0 shape: {tuple(dataset['x0'].shape)}")
+          f"{args.dataset_denoising_steps or int(model.diffusion.num_base_steps)} denoising steps)...", flush=True)
+    dataset = build_pseudo_dataset(
+        model,
+        device,
+        prompts,
+        args.dataset_denoising_steps,
+        prompt_batch_size=args.dataset_prompt_batch_size,
+    )
+    print(f"x0 shape: {tuple(dataset['x0'].shape)}", flush=True)
 
     # -- swap in ArdyMambaBlock, freeze everything else --
     raw_denoiser = model.denoiser.model  # see Milestone B correction: NOT model.denoiser directly
@@ -265,7 +292,7 @@ def main() -> int:
     trainable_params = list(mamba_root.parameters()) + list(mamba_body.parameters())
     n_trainable = sum(p.numel() for p in trainable_params)
     n_total = sum(p.numel() for p in model.parameters())
-    print(f"Trainable params: {n_trainable:,} / {n_total:,} total ({100 * n_trainable / n_total:.2f}%)")
+    print(f"Trainable params: {n_trainable:,} / {n_total:,} total ({100 * n_trainable / n_total:.2f}%)", flush=True)
 
     optimizer = torch.optim.AdamW(trainable_params, lr=args.lr)
 
@@ -284,6 +311,7 @@ def main() -> int:
             "num_prompts": len(prompts),
             "prompts_file": args.prompts_file,
             "seed": args.seed,
+            "dataset_prompt_batch_size": args.dataset_prompt_batch_size,
             "trainable_params": n_trainable,
             "model": resolved_model,
         },
@@ -304,7 +332,7 @@ def main() -> int:
         optimizer.step()
 
         if step % args.log_every == 0 or step == args.steps - 1:
-            print(f"step {step}: loss={loss.item():.6f} grad_norm={grad_norm.item():.4f}")
+            print(f"step {step}: loss={loss.item():.6f} grad_norm={grad_norm.item():.4f}", flush=True)
             wandb.log({"loss": loss.item(), "grad_norm": grad_norm.item(), "step": step})
 
         if args.ckpt_every and (step % args.ckpt_every == 0 and step > 0 or step == args.steps - 1):
@@ -318,14 +346,15 @@ def main() -> int:
                     "prompts_file": args.prompts_file,
                     "seed": args.seed,
                     "dataset_denoising_steps": args.dataset_denoising_steps,
+                    "dataset_prompt_batch_size": args.dataset_prompt_batch_size,
                     "model": resolved_model,
                 },
                 ckpt_path,
             )
-            print(f"Saved checkpoint to {ckpt_path}")
+            print(f"Saved checkpoint to {ckpt_path}", flush=True)
 
     wandb.finish()
-    print("TRAINING_DONE")
+    print("TRAINING_DONE", flush=True)
     return 0
 
 
