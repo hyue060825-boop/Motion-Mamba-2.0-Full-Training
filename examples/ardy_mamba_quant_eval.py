@@ -237,7 +237,7 @@ def main() -> int:
     try:
         if not args.no_warmup:
             warmup_prompt = prompts[0]
-            warmup_seed = args.seed - 1
+            warmup_seed = args.seed + 100000
             print(f"Warmup, not recorded: {warmup_prompt!r}")
             generate(warmup_prompt, original_root, original_body, warmup_seed)
             generate(warmup_prompt, mamba_root, mamba_body, warmup_seed)
