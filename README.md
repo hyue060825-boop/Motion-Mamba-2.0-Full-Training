@@ -10,26 +10,30 @@ server paths.
 ## Current Layout
 
 ```text
-mamba-transformer-keneral/
+ardy/
 ```
 
-Standalone Mamba-side code copied into this repository as source, not as a git
-submodule. It contains:
+`ardy/`
 
-- Mamba-3 sequence/state wrappers.
-- State-memory operator experiments.
-- ARDY-compatible `ArdyMambaBlock`.
-- Distillation, quantitative evaluation, and ARDY viser helper scripts.
+Main ARDY basecode used as the current humanoid motion generation/control
+baseline and visualization stack.
+
+## Branch Layout
+
+Use branches to keep the paper-code repository readable:
+
+- `main`: clean ARDY basecode.
+- `mamba-transformer-keneral`: standalone Mamba-side operator code.
+- `ardymamba`: planned branch for the cleaned experimental ARDY/Mamba fork
+  imported from the server.
 
 ## Planned Layout
 
 ```text
-ardy/                         # main ARDY basecode, to be cleaned and added
-mamba-transformer-keneral/    # Mamba operator and ARDY adapter code
+ardy/                         # main ARDY basecode
 docs/                         # paper-code notes, setup, repo map
 ```
 
 The older direct ARDY Transformer-to-Mamba modification from the server should
-be inspected before import. If it is useful, add it as a cleaned code directory
-or merge the reusable pieces into `mamba-transformer-keneral`; do not import
-large experiment outputs.
+be inspected before import. If it is useful, put the cleaned version on the
+`ardymamba` branch. Do not import large experiment outputs.

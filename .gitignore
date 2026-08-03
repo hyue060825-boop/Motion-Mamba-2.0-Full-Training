@@ -23,6 +23,9 @@ checkpoints/
 *.mp4
 *.log
 
+# Required lightweight ARDY assets
+!ardy/ardy/assets/**/*.npz
+
 # System/editor
 .DS_Store
 .vscode/
