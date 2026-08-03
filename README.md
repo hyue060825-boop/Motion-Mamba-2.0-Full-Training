@@ -1,2 +1,1 @@
-# MotionMamba2.0
-Motion Mamba 2.0: Autoregressive Diffusion Mamba for Real-Time Humanoid Motion Control
+# Motion Mamba 2.0: Autoregressive Diffusion Mamba for Real-Time Humanoid Motion Control
