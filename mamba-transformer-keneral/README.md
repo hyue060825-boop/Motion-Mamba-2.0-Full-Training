@@ -1,0 +1,111 @@
+# Mamba Transformer Kernel
+
+This repository is the clean integration surface for the Mamba-side operator
+work used by downstream motion / simulation / server-side experiments.
+
+It is intentionally not a research log repo. Planning notes, daily logs, and
+experiment memory live elsewhere. This repo should contain only code,
+interfaces, tests, and short documentation needed by collaborators who connect
+the Mamba operator to training or deployment systems.
+
+## Current Scope
+
+The Mamba side owns, and now IMPLEMENTS (`src/state_memory_operator/`):
+
+- Mamba-3 SISO chunk operator wrapper.
+- Explicit recurrent state handoff across chunks, with per-row episode reset.
+- State projection from Mamba recurrent state.
+- Fixed-capacity Event Memory (FIFO and Participative-eviction backends,
+  unified in one class) with per-row async reset and automatic compaction.
+- State-based Q/K retrieval + content-based V (validated: state indexes
+  reliably but does not carry fine-grained content -- see
+  `state_qkv.py`'s docstring).
+- Operator diagnostics (`aux` dict): retrieval entropy/weights/sims,
+  injection norm, memory usage norm, peak GPU memory.
+
+Downstream systems own:
+
+- Motion / sequence data loading.
+- Conditions, targets, and task losses.
+- Episode boundaries and reset masks.
+- Simulator or robot runtime.
+- Benchmark and evaluation scripts.
+
+## Start Here
+
+Install (editable) and run the tests:
+
+```bash
+pip install -e .
+pytest tests/test_smoke.py -v
+```
+
+Run the quickstart example:
+
+```bash
+python examples/quickstart.py
+```
+
+Minimal usage:
+
+```python
+from mamba_ssm.modules.mamba3 import Mamba3
+from state_memory_operator import StateMemoryOperatorConfig, StateTransitionMemoryOperator
+
+mamba3 = Mamba3(d_model=128, d_state=64, expand=2, headdim=64, ngroups=1,
+                 is_mimo=False, chunk_size=16, layer_idx=0,
+                 device="cuda", dtype=torch.bfloat16)
+config = StateMemoryOperatorConfig(d_model=128, memory_backend="participative")
+operator = StateTransitionMemoryOperator(mamba3, config).cuda()
+
+op_state = operator.init_operator_state(batch_size, device="cuda")
+memory = operator.init_memory(batch_size, device="cuda")
+
+out, op_state, memory, aux = operator.forward_chunk_with_memory(
+    x, op_state, memory, read_content=content, write_content=content,
+)
+```
+
+Read the integration contract and ARDY replacement plan for what's validated,
+what isn't, and where this connects to ARDY:
+
+```text
+docs/mamba_integration_contract.md
+docs/ardy_mamba_replacement_plan.md
+```
+
+## ARDY Mamba Viser Path
+
+For interactive visualization, do not use the MP4 render helper. Generate a
+normal ARDY `.npz` with the trained Mamba denoiser blocks, then open that file
+with ARDY's own `scripts/visualize.py` viser viewer:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 \
+CHECKPOINTS_DIR=/path/to/ardy/checkpoints \
+MAMBA_TRITON_OVERLAY=/path/to/mamba_op_triton \
+MAMBA_REPO=/path/to/state-spaces-mamba \
+python examples/ardy_mamba_generate_for_viser.py \
+    --checkpoint /path/to/mamba_blocks_step1999.pt \
+    --prompt "A person jumps." \
+    --output /tmp/ardy_mamba_vis/jump \
+    --launch-viser --port 2334
+```
+
+Then open:
+
+```text
+http://localhost:2334
+```
+
+Progress is tracked with `[ ]` / `[x]` checklists in those docs -- keep them
+honest: update a box only when its stated acceptance criterion has actually
+been verified, and correct it immediately if you find it's gone stale (this
+happened once already, 2026-07-20 -> 2026-07-25, and cost real confusion).
+
+**Current stage: Mamba-side Level 2 operator is implemented, and the first
+ARDY denoiser replacement path has reached Milestone C.** `ArdyMambaBlock`
+exists as a drop-in root/body denoiser block replacement, a first distillation
+checkpoint has been evaluated, and interactive viewing should go through the
+`.npz` + ARDY viser path above. MIMO/CUTE and cross-window recurrent memory in
+ARDY remain later-stage work.
