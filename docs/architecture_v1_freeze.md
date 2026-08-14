@@ -32,7 +32,26 @@ is absent from both the module tree and the operational import path.
 
 Minimal plus the existing Mamba-3 branch through `SequenceKernel`'s frozen
 gated-add fusion. Attention K/V and Mamba recurrent state remain separate.
-The existing Mamba implementation is reused and is not redesigned here.
+The existing Mamba implementation is reused and is not redesigned here. This
+mode is an integration scaffold, not the finalized MotionMamba Contribution-1
+architecture.
+
+## Paper/release positioning
+
+The architecture freeze and paper-contribution boundary are different claims:
+
+- Original, DiT, and Minimal are standard baselines. Minimal intentionally
+  combines AR diffusion, DiT, native FlashAttention, sliding-window K/V, and
+  attention sinks without claiming novelty.
+- `MinimalAttentionKernel` is a compatibility implementation-module name, not
+  a custom-kernel contribution.
+- MotionMamba 2.0 begins when Mamba-specific token/state modeling is added.
+- The current Hybrid gated-add implementation is scaffolding for experiments;
+  future Contribution 1 targets token/state interaction or delta modeling.
+- Future Contribution 2 is the integrated/custom kernel corresponding to the
+  finalized Contribution-1 mechanism. It does not belong to Minimal.
+- SDPA is the reference, FA2 is currently implemented/validated, and FA4 is an
+  intended future native backend replacement with no current result claim.
 
 ## Frozen memory semantics
 

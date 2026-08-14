@@ -2,6 +2,13 @@
 
 Last updated: 2026-07-20.
 
+Post-Stage-05 scope note (2026-08-14): this document began as an engineering
+replacement plan. Its paper-level contribution mapping is superseded by
+`docs/paper_architecture_scope.md`. Original, DiT, and Minimal are standard
+baselines; MotionMamba 2.0 begins only with Mamba-specific token/state
+interaction. The current generic Hybrid path is scaffolding, not the final
+paper method.
+
 Purpose: define exactly how the Mamba-side work connects to ARDY-style
 humanoid motion generation/control.
 
@@ -584,33 +591,37 @@ Validation checklist:
 - [ ] Oracle memory improves long-horizon synthetic recall.
 - [ ] Motion drift reduces at longer horizons.
 
-## 15. Contribution Mapping
+## 15. Final contribution boundary
 
-Contribution 1, real time:
+Standard baselines are Original ARDY, DiT, and Minimal. Minimal is AR diffusion
++ DiT + native FlashAttention + sliding-window K/V + attention sinks, with no
+Mamba and no novelty claim for those components.
 
-```text
-ARDY transformer denoiser block
-  -> Mamba-3 SISO block
-  -> lower attention memory growth
-  -> latency / peak-memory benchmark
-```
-
-Contribution 2, long horizon:
+Contribution 1 begins above Minimal:
 
 ```text
-ARDY cropped history window
-  -> Mamba recurrent state across chunks
-  -> Event Memory / State-QKV
-  -> later compressed memory + sink-style memory
+token-level representation from Attention
++ state-level representation/propagation from Mamba
+-> model their interaction or delta
+-> Hybrid Attention–Mamba modeling
 ```
 
-Contribution 3, humanoid evaluation:
+The final mathematical interaction is deliberately unresolved. The existing
+parallel attention/Mamba paths with scalar gated addition are an integration
+scaffold and must not be relabeled as the final contribution.
+
+Contribution 2 follows only after Contribution 1 is finalized:
 
 ```text
-Keep ARDY G1 motion representation and MuJoCo export.
-Compare baseline ARDY vs Mamba-denoiser ARDY vs memory-augmented Mamba.
-Later connect generated G1 qpos/motion to G1 simulation or real-world stack.
+final token/state interaction
+-> corresponding efficient integrated/custom kernel
 ```
+
+It is not Minimal's attention backend, and it is not simply FA4. Custom
+Attention–Mamba CUDA/Triton fusion, fused state/K/V update, and paged-K/V work
+are separate future work. Motion generation, long-horizon evaluation,
+benchmarks, simulation, and real-robot evaluation form the evaluation program,
+not additional definitions of the Minimal baseline.
 
 ## 16. Non-Goals For First Server Handoff
 

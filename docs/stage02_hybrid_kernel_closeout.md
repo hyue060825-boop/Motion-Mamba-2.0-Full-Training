@@ -2,6 +2,12 @@
 
 Date: 2026-08-14.
 
+Paper-positioning clarification: this generic gated-add Hybrid is a validated
+integration/ablation scaffold, not the finalized MotionMamba 2.0
+Contribution-1 mechanism. The future contribution targets token/state
+interaction or delta modeling; its corresponding custom kernel is later
+Contribution 2. Historical validation evidence below is unchanged.
+
 Overall status: **PASS**.
 
 Stage 2 adds a thin generic integration layer. It does not modify files under

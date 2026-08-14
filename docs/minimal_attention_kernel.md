@@ -2,26 +2,17 @@
 
 Last updated: 2026-08-14.
 
-## Repository audit
+## Positioning and dependencies
 
-The repository is an installable `src/`-layout Python package. Its existing
-runtime is Mamba-specific:
+`MinimalAttentionKernel` is a compatibility code name for the baseline
+attention backend. It is not a proposed MotionMamba kernel and carries no
+custom-kernel novelty claim. The baseline deliberately uses standard attention,
+chunk-level sliding-window K/V, and attention sinks.
 
-- `src/state_memory_operator/` exposes `Mamba3ChunkWrapper`, recurrent state
-  projection, State-QKV retrieval, and FIFO/participative Event Memory.
-- Importing `state_memory_operator` eagerly imports
-  `mamba3_chunk_wrapper.py`, which imports `mamba_ssm` and its Triton kernels.
-  The minimal path therefore must not be re-exported through that package.
-- `src/ardy_adapter/` is downstream integration code and is intentionally not
-  used by this kernel.
-- Configuration uses ordinary dataclasses (`StateMemoryOperatorConfig`).
-- Stateful callers explicitly create state/memory, pass it to
-  `forward_chunk`, and receive state plus an `aux` dictionary. The new API
-  follows this convention while keeping read and commit separate.
-- Existing tests are mainly CUDA Mamba tests plus CPU tests for Event Memory.
-  `tests/conftest.py` only adds the repository `src/` directory when CUDA is
-  available, so the standalone tests add it without initializing Mamba.
-- There was no reusable self-attention implementation in this repository.
+The package is ARDY-independent and Mamba-independent. Importing or
+instantiating it does not import `mamba_ssm`, `Mamba3`,
+`StateTransitionMemoryOperator`, or `EventMemory`. A downstream model only
+needs `[batch, chunk_tokens, model_dim]` tensors and an explicit cache object.
 
 Local backend audit (2026-08-14):
 
@@ -29,12 +20,14 @@ Local backend audit (2026-08-14):
   `2.10.0+cu128` and FlashAttention `2.8.3`.
 - FlashAttention exports `flash_attn_func`, whose separate Q/K/V interface
   supports `Q length != K/V length`.
-- No FlashAttention 4 Python package/interface was found. FA4 is not claimed.
+- No FlashAttention 4 Python package/interface was found. FA4 is the intended
+  future optimized native backend, but is not implemented or validated.
 - CUDA was not visible in the local execution session, so CPU correctness is
   verified with PyTorch SDPA; FlashAttention tests skip explicitly unless a
   compatible CUDA device and dtype are available.
 
-The existing Mamba path remains unchanged and coexists with the new package.
+Changing FA2 to FA4 is intended to be a backend substitution with identical
+cache/read/commit semantics, not an architecture change.
 
 ## Architecture
 
@@ -94,6 +87,14 @@ from minimal_attention_kernel import (
     MinimalAttentionKernelConfig,
 )
 
+config = MinimalAttentionKernelConfig(
+    d_model=D,
+    num_heads=H,
+    window_size_chunks=4,
+    use_attention_sinks=True,
+    num_sink_tokens=4,
+    attention_backend="flash2",
+)
 kernel = MinimalAttentionKernel(config)
 cache = kernel.init_cache(batch_size=B, device=x.device, dtype=x.dtype)
 
@@ -105,6 +106,23 @@ kernel.commit(cache, pending, chunk_id=0)
 the explicit two-call form is preferred when a caller must decide whether a
 chunk is final/accepted. The cache is an explicit mutable object; it is never
 hidden in module-global or module-instance state.
+
+### Inputs and outputs
+
+- Input `x`: `[B, L, D]`, where `L` is the current chunk length.
+- Optional `current_mask`: valid current tokens per batch row.
+- Output `out`: `[B, L, D]`; it does not include history or sink positions.
+- `pending`: projected current K/V eligible for a later explicit commit.
+- `aux`: requested/used backend and cache diagnostics.
+
+To use the backend with another dataset or model, instantiate one backend and
+one cache per attention layer, feed that layer's current chunk, and carry only
+the cache across chunks. The backend does not assume motion data, text
+conditioning, diffusion, root/body structure, or ARDY. Set
+`window_size_chunks=0` and `use_attention_sinks=False` for a no-persistent-
+history attention ablation. Simply construct `MinimalAttentionKernel`, or a
+`SequenceKernel` whose config has `mode="minimal"`, to keep Mamba disabled; no
+Mamba object or package is needed.
 
 ## Cache representation and sliding window
 
@@ -139,6 +157,13 @@ Read and commit are separate operations:
 This permits any caller to perform repeated read-only passes and commit only
 an accepted representation. The kernel has no diffusion-specific knowledge.
 
+For the ARDY Minimal baseline, every noisy denoising evaluation is read-only.
+Only the accepted clean autoregressive chunk commits, exactly once. Root/body
+commit is transactional: if either stage fails, both states roll back. ARDY's
+separated CFG branches read the same persistent batch-B cache without turning
+the 2B/3B guidance batch into persistent state. These are correctness
+properties, not paper novelty claims.
+
 ## Reset semantics
 
 `kernel.reset_cache(cache)` drops every normal chunk. A direct `cache.reset()`
@@ -158,7 +183,9 @@ that become invalid for every row are removed. Learned static sinks remain.
   when configured to allow fallback; diagnostics report the backend actually
   used. Explicit `allow_backend_fallback=False` raises instead.
 - `flash4`: reserved configuration name which currently raises
-  `NotImplementedError`. No FA4 support is claimed.
+  `NotImplementedError`. It is the intended final optimized native backend,
+  but no FA4 implementation, validation, latency, memory, or quality result is
+  claimed.
 
 Both backends use the same Q/K/V concatenation and mask semantics. Arbitrary
 per-row history masks (needed by asynchronous batch reset) use SDPA because
@@ -175,6 +202,11 @@ Attention + chunk-level sliding-window KV cache + learned attention sinks
 It contains no ARDY adapter, DiT, diffusion loop or timestep conditioning,
 motion/root/body representation, Mamba import, hybrid fusion, Deep Forcing,
 participative eviction, simulation, or robotics code.
+
+These standard components form the reusable Minimal baseline. MotionMamba 2.0
+begins only after Mamba-specific token/state modeling is added. A future
+integrated/custom Attention–Mamba kernel belongs to that future mechanism, not
+to this package.
 
 ## Known limitations
 
@@ -194,8 +226,9 @@ participative eviction, simulation, or robotics code.
   parameter updates would make them stale. The cache records the K/V projection
   parameter mutation counters and rejects stale reads/commits until the caller
   performs a full `kernel.reset_cache(cache)`.
-- Actual FlashAttention latency/parity and peak GPU allocation remain to be
-  executed on a session with a working CUDA driver.
+- FA2 parity, backward, latency, and peak allocation were subsequently
+  validated on A800 and are recorded in the Stage-01 closeout. FA4 remains
+  unimplemented and unvalidated.
 
 ## Local verification record
 

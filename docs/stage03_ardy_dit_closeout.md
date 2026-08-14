@@ -2,6 +2,12 @@
 
 Date: 2026-08-14.
 
+Post-closeout scope note: DiT and Minimal are now classified as standard
+baselines. The existing Hybrid path is an integration scaffold, not the final
+MotionMamba contribution. This note does not alter the historical Stage-03
+status/evidence; current trained results are in Stage 05 and the authoritative
+paper boundary is `docs/paper_architecture_scope.md`.
+
 Overall status: **FUNCTIONAL INTEGRATION PASS; TRAINED END-TO-END MOTION RUN
 BLOCKED BY DATA/TRAINED CHECKPOINT.**
 

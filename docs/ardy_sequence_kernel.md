@@ -8,11 +8,16 @@ a downstream client that replaces only `root_model` and `body_model`.
 ## Configurations
 
 ```text
-original  ARDY's released TransformerEncoderBlock, unchanged
-dit       DiTSequenceStack + attention with W=0 and no sinks
-minimal   DiTSequenceStack + Stage-1 attention, sliding KV, learned sinks
-hybrid    minimal + existing Mamba3ChunkWrapper per DiT layer
+original  legacy ARDY Transformer baseline, unchanged
+dit       DiT modernization baseline; W=0, no sinks, no Mamba
+minimal   recommended standard attention baseline; sliding KV + sinks; no Mamba
+hybrid    experimental MotionMamba integration scaffold; Mamba enabled
 ```
+
+`dit` and `minimal` are controlled standard baselines, not MotionMamba paper
+contributions. MotionMamba 2.0 begins only with Mamba-specific token/state
+modeling. The current Hybrid gated-add path is structural scaffolding and must
+not be presented as the finalized Contribution-1 mechanism.
 
 Programmatic installation:
 
@@ -61,6 +66,11 @@ viewer-compatible generation through 8 chunks. The release-recommended path
 is `--minimal`; see `docs/stage05_dit_minimal_closeout.md` for immutable hashes
 and measured commands. Hybrid remains structural only and has no Stage-05
 trained checkpoint.
+
+Backend policy is independent of these mode definitions: SDPA is the
+correctness reference, FA2 is the currently implemented/validated native
+development backend, and FA4 is the intended future optimized native backend.
+FA4 is not implemented or validated and will not change Minimal's architecture.
 
 ## DiT block
 
@@ -130,3 +140,5 @@ parameters or buffers.
   require a mode-matching trained checkpoint; Stage-05 DiT and Minimal
   checkpoints satisfy this requirement.
 - `flash4` remains reserved and the launcher rejects it.
+- Any future custom fused kernel belongs to the finalized MotionMamba hybrid
+  token/state mechanism, not to Minimal or DiT.

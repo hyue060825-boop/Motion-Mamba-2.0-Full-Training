@@ -2,6 +2,12 @@
 
 Date: 2026-08-14.
 
+Paper-positioning clarification: “kernel” is the historical implementation
+module name. Stage 1 is a standard reference streaming-attention backend and
+is not the MotionMamba custom-kernel contribution. Numerical and engineering
+evidence in this historical closeout is unchanged; see
+`docs/paper_architecture_scope.md`.
+
 Overall status: **PASS, INCLUDING EXACT CUDA FA2 ACCEPTANCE POINT.**
 
 Stage 1 contains no ARDY, DiT, diffusion, or Mamba integration. All

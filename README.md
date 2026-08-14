@@ -1,15 +1,39 @@
 # Mamba Transformer Kernel
 
-This repository is the clean integration surface for the Mamba-side operator
-work used by downstream motion / simulation / server-side experiments.
+This repository contains the reusable ARDY attention-only baseline and the
+integration scaffold for later MotionMamba research. The paper/release boundary
+is explicit: **Minimal is a standard baseline; MotionMamba 2.0 begins only when
+Mamba-specific token/state modeling is introduced.** See
+`docs/paper_architecture_scope.md` before interpreting the code names as paper
+contributions.
 
-It now also provides an entirely independent minimal attention primitive:
+## Quick Start
+
+The four stable CLI modes are:
+
+```text
+--minimal   recommended standard attention-only AR-diffusion baseline; no Mamba
+--dit       DiT modernization ablation; no persistent K/V, sinks, or Mamba
+--original  legacy ARDY Transformer compatibility baseline
+--hybrid    experimental MotionMamba integration scaffold; contains Mamba
+```
+
+Start with `--minimal`. It deliberately combines standard components—ARDY
+autoregressive diffusion, DiT, native FlashAttention, chunk-level sliding K/V,
+and attention sinks. No architectural novelty is claimed for those components.
+The current validated native backend is FA2; FA4 is a future backend validation,
+not a completed result or an architecture change.
+
+The repository provides an entirely independent baseline attention backend:
 
 ```text
 Attention + chunk-level sliding-window KV cache + learned attention sinks
 ```
 
-This path imports and runs without `mamba_ssm` or ARDY. Start with
+The compatibility package/class names retain the historical word `kernel`, but
+they refer to an implementation module/backend—not the MotionMamba custom
+kernel contribution. This path imports and runs without `mamba_ssm` or ARDY.
+Start with
 `docs/minimal_attention_kernel.md` and the standalone example:
 
 ```bash
@@ -52,9 +76,10 @@ minimal.commit(state, pending, chunk_id=0)
 ```
 
 `mode="minimal"` imports and instantiates zero Mamba modules. For
-`mode="hybrid"`, pass an existing `Mamba3` instance; the kernel preserves the
-attention KV cache and Mamba recurrent state as separate state objects and
-uses explicit gated-add fusion. See `docs/sequence_kernel.md` and
+`mode="hybrid"`, pass an existing `Mamba3` instance; the sequence backend
+preserves the attention KV cache and Mamba recurrent state as separate state
+objects and uses the existing gated-add scaffold. That scaffold is not the
+finalized MotionMamba Contribution-1 mechanism. See `docs/sequence_kernel.md` and
 `docs/stage02_hybrid_kernel_closeout.md`.
 
 The downstream ARDY client now supports four explicit configurations without
@@ -62,14 +87,14 @@ rewriting ARDY's motion representation, diffusion sampler, constraints, or
 postprocessing:
 
 ```text
---original  released Transformer ARDY baseline
---dit       DiT-style denoiser, no cross-window memory
---minimal   DiT + sliding attention KV + dedicated sinks, Mamba off
---hybrid    minimal path + existing Mamba-3 recurrent state
+--original  legacy ARDY Transformer baseline
+--dit       DiT modernization baseline; no persistent K/V, sinks, or Mamba
+--minimal   recommended standard attention baseline; sliding K/V + sinks; no Mamba
+--hybrid    experimental MotionMamba integration scaffold; Mamba enabled
 ```
 
-The release-recommended attention-only baseline is `--minimal`. It is trained
-from the DiT checkpoint and does not instantiate or import Mamba. Use
+The release-recommended standard attention-only baseline is `--minimal`. It is
+trained from the DiT checkpoint and does not instantiate or import Mamba. Use
 `--original` for the released legacy comparison, `--dit` to ablate persistent
 history and sinks, and `--hybrid` only with a separately trained research
 Hybrid checkpoint; Stage 05 did not train Hybrid.
@@ -99,7 +124,8 @@ directly in ARDY's `scripts/visualize.py`. Run
 `python examples/ardy_sequence_kernel_generate.py --help` for all four modes,
 and see `docs/stage05_dit_minimal_closeout.md` for checkpoint hashes, measured
 training/generation results, and exact commands. FA4 and custom fused kernels
-are not claimed by this release.
+are not claimed by this release. The future custom kernel belongs only to the
+future MotionMamba token/state interaction, not to Minimal.
 
 The existing state-transition/Mamba packages below remain available, are
 unchanged by the generic integration, and are not imported by the minimal

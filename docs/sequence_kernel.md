@@ -7,6 +7,12 @@ minimal = closed Stage-1 attention implementation
 hybrid  = minimal attention + existing Mamba-3 + explicit gated addition
 ```
 
+Paper positioning: `minimal` is the standard reusable baseline backend. The
+current `hybrid` is an integration/ablation scaffold proving that independent
+attention K/V and Mamba recurrent state can coexist. Its scalar gated addition
+is not the finalized MotionMamba 2.0 Contribution-1 architecture. See
+`docs/paper_architecture_scope.md`.
+
 ## Construction
 
 ```python
@@ -63,7 +69,7 @@ evaluations followed by one clean accepted commit.
 They are never stored inside one another. A commit accepts both candidates at
 the same boundary; reset applies the appropriate mechanism to each state.
 
-## Hybrid fusion and ablations
+## Current hybrid scaffold and ablations
 
 When both paths are enabled:
 
@@ -75,6 +81,12 @@ The gate is a learned scalar initialized to a logit of zero (weight 0.5 by
 default). `enable_attention_path` and `enable_mamba_path` support controlled
 tests and research ablations. A Mamba-only call is supported in hybrid mode;
 it is not a third construction mode.
+
+Future Contribution 1 is expected to model the interaction or delta between
+token-level attention representation and state-level Mamba representation. No
+final operator is specified here. Future Contribution 2 is the corresponding
+integrated/custom kernel after that operator is finalized; it is not this
+generic gated-add implementation and is not part of Minimal.
 
 ## Current constraints
 

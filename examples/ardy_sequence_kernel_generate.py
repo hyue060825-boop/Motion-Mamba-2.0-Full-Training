@@ -39,10 +39,22 @@ def parse_args() -> argparse.Namespace:
         description="Generate ARDY with original/DiT/minimal/hybrid sequence mixers."
     )
     modes = parser.add_mutually_exclusive_group()
-    modes.add_argument("--original", action="store_true", help="Released ARDY baseline.")
-    modes.add_argument("--dit", action="store_true", help="DiT with no cross-window cache.")
-    modes.add_argument("--minimal", action="store_true", help="DiT + sliding KV + sinks; Mamba off.")
-    modes.add_argument("--hybrid", action="store_true", help="Minimal path + existing Mamba-3.")
+    modes.add_argument("--original", action="store_true", help="Legacy ARDY baseline.")
+    modes.add_argument(
+        "--dit",
+        action="store_true",
+        help="DiT modernization baseline; no persistent KV, sinks, or Mamba.",
+    )
+    modes.add_argument(
+        "--minimal",
+        action="store_true",
+        help="Recommended standard attention baseline; sliding KV + sinks; Mamba off.",
+    )
+    modes.add_argument(
+        "--hybrid",
+        action="store_true",
+        help="Experimental MotionMamba integration scaffold; Mamba enabled.",
+    )
     parser.add_argument("--sequence-checkpoint", help="Checkpoint with root_model/body_model state dicts.")
     parser.add_argument("--attention-backend", choices=["sdpa", "flash2", "flash4"], default="flash2")
     parser.add_argument("--window-size-chunks", type=int, default=4)

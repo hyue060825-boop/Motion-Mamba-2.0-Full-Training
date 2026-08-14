@@ -295,6 +295,11 @@ Remaining blockers:
 
 ## 9. Later Hybrid initialization plan (not executed)
 
+Historical note: this initialization sketch predates the final paper boundary.
+It must not be executed or presented as the MotionMamba method until the
+Contribution-1 token/state interaction is formally finalized. The current
+gated-add Hybrid remains only an integration scaffold.
+
 After Minimal passes D: load the Minimal checkpoint into Hybrid, initialize the
 existing Mamba/fusion contribution near zero so `Hybrid(step 0) ≈ Minimal`,
 train Mamba/fusion, then jointly fine-tune. No implementation or Hybrid

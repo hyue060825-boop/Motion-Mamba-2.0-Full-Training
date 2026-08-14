@@ -294,4 +294,31 @@ benchmark; current Minimal boundaries remain visibly imperfect; optional
 `motion_correction` was unavailable on the A800, so controlled outputs used
 `--no-postprocess`; no trained Hybrid checkpoint is claimed.
 
+## Post-Stage-05 paper/release semantics clarification
+
+This clarification changes positioning only. It does not change the frozen
+architecture, checkpoints, hashes, commands, or numerical evidence above.
+
+1. Minimal is the recommended standard attention-only baseline, not a proposed
+   custom kernel or a MotionMamba contribution. Its AR diffusion, DiT, native
+   attention backend, sliding-window K/V, and attention sinks carry no novelty
+   claim.
+2. DiT is baseline modernization that isolates the replacement of ARDY's
+   custom Transformer denoiser with a standard DiT-style denoiser.
+3. SDPA is the correctness backend. FA2 is the currently implemented and
+   validated native development backend. FA4 is the intended future optimized
+   native backend, but it is not implemented or validated; it is a backend
+   replacement rather than an architecture change. The frozen Stage-05
+   training/comparison used SDPA exactly as recorded above; the checkpoint
+   weights remain compatible with the separately validated FA2 backend.
+4. MotionMamba 2.0 begins only when Mamba-specific state modeling and the
+   token/state interaction are introduced above Minimal.
+5. The future integrated/custom kernel belongs to that MotionMamba hybrid
+   mechanism, not to Minimal.
+6. Existing `--hybrid` code is an integration scaffold with generic gated-add
+   fusion. It is not the finalized Contribution-1 architecture and no Stage-05
+   Hybrid checkpoint is claimed.
+
+The concise authoritative boundary is `docs/paper_architecture_scope.md`.
+
 DIT_AND_MINIMAL_COMPLETE
