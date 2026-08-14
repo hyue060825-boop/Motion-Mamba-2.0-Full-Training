@@ -13,9 +13,33 @@ memory compaction, FIFO vs. Participative eviction behavior).
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
+
 import torch
 
 from conftest import requires_cuda
+
+
+def test_event_memory_import_does_not_require_mamba():
+    env = dict(os.environ)
+    env["PYTHONPATH"] = os.pathsep.join(
+        filter(None, [str(os.path.join(os.path.dirname(__file__), "..", "src")), env.get("PYTHONPATH")])
+    )
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from state_memory_operator import EventMemory; "
+            "import sys; assert 'mamba_ssm' not in sys.modules; assert EventMemory.__name__ == 'EventMemory'",
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def _make_mamba3(seed: int = 0, d_model: int = 64):

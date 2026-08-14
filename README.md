@@ -3,6 +3,108 @@
 This repository is the clean integration surface for the Mamba-side operator
 work used by downstream motion / simulation / server-side experiments.
 
+It now also provides an entirely independent minimal attention primitive:
+
+```text
+Attention + chunk-level sliding-window KV cache + learned attention sinks
+```
+
+This path imports and runs without `mamba_ssm` or ARDY. Start with
+`docs/minimal_attention_kernel.md` and the standalone example:
+
+```bash
+PYTHONPATH=src python examples/minimal_attention_kernel.py
+```
+
+Minimal usage:
+
+```python
+import torch
+
+from minimal_attention_kernel import MinimalAttentionKernel, MinimalAttentionKernelConfig
+
+config = MinimalAttentionKernelConfig(
+    d_model=256,
+    num_heads=8,
+    window_size_chunks=4,
+    use_attention_sinks=True,
+    num_sink_tokens=4,
+    attention_backend="flash2",
+)
+kernel = MinimalAttentionKernel(config).to(device="cuda", dtype=torch.float16)
+cache = kernel.init_cache(batch_size=2)
+
+output, pending, aux = kernel.forward_chunk(x, cache=cache, commit=False)
+kernel.commit(cache, pending, chunk_id=0)
+```
+
+Stage 2 exposes the attention primitive through one generic interface:
+
+```python
+from sequence_kernel import SequenceKernel, SequenceKernelConfig
+
+minimal = SequenceKernel(
+    SequenceKernelConfig(mode="minimal", attention=config)
+)
+state = minimal.init_state(batch_size=2)
+output, pending, aux = minimal.forward_chunk(x, state=state)
+minimal.commit(state, pending, chunk_id=0)
+```
+
+`mode="minimal"` imports and instantiates zero Mamba modules. For
+`mode="hybrid"`, pass an existing `Mamba3` instance; the kernel preserves the
+attention KV cache and Mamba recurrent state as separate state objects and
+uses explicit gated-add fusion. See `docs/sequence_kernel.md` and
+`docs/stage02_hybrid_kernel_closeout.md`.
+
+The downstream ARDY client now supports four explicit configurations without
+rewriting ARDY's motion representation, diffusion sampler, constraints, or
+postprocessing:
+
+```text
+--original  released Transformer ARDY baseline
+--dit       DiT-style denoiser, no cross-window memory
+--minimal   DiT + sliding attention KV + dedicated sinks, Mamba off
+--hybrid    minimal path + existing Mamba-3 recurrent state
+```
+
+The release-recommended attention-only baseline is `--minimal`. It is trained
+from the DiT checkpoint and does not instantiate or import Mamba. Use
+`--original` for the released legacy comparison, `--dit` to ablate persistent
+history and sinks, and `--hybrid` only with a separately trained research
+Hybrid checkpoint; Stage 05 did not train Hybrid.
+
+Real DiT and Minimal checkpoints require `--sequence-checkpoint`. For a raw
+prompt, provide the exact ARDY LLM2Vec base mirror and both adapters:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 python examples/ardy_sequence_kernel_generate.py \
+  --minimal \
+  --sequence-checkpoint /path/to/sequence_minimal.pt \
+  --ardy-root /path/to/ardy \
+  --checkpoints-dir /path/to/ardy_checkpoints \
+  --model nvidia/ARDY-Core-RP-20FPS-Horizon40 \
+  --text-encoder-base-mirror /path/to/unsloth_llama3_8b_instruct \
+  --text-encoder-mntp-adapter /path/to/llm2vec_mntp \
+  --text-encoder-supervised-adapter /path/to/llm2vec_supervised \
+  --prompt "A person walks forward carefully, then turns around." \
+  --duration 16 --diffusion-steps 10 \
+  --window-size-chunks 4 --sink-tokens 4 \
+  --output outputs/minimal_walk_turn.npz
+```
+
+For exact cached-feature reproduction, replace the three text-encoder options
+with `--text-feature-sample /path/to/cached_sample.pt`. The output `.npz` opens
+directly in ARDY's `scripts/visualize.py`. Run
+`python examples/ardy_sequence_kernel_generate.py --help` for all four modes,
+and see `docs/stage05_dit_minimal_closeout.md` for checkpoint hashes, measured
+training/generation results, and exact commands. FA4 and custom fused kernels
+are not claimed by this release.
+
+The existing state-transition/Mamba packages below remain available, are
+unchanged by the generic integration, and are not imported by the minimal
+path.
+
 It is intentionally not a research log repo. Planning notes, daily logs, and
 experiment memory live elsewhere. This repo should contain only code,
 interfaces, tests, and short documentation needed by collaborators who connect

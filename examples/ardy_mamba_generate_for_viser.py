@@ -40,8 +40,15 @@ MAMBA_REPO = os.environ.get("MAMBA_REPO", "/home/plote/mambamotion/basecode/mamb
 
 def _prepend_python_paths(*paths: str | Path) -> None:
     for path in reversed([str(p) for p in paths if p]):
-        if path and path not in sys.path:
-            sys.path.insert(0, path)
+        if not path:
+            continue
+        # The script directory is sys.path[0].  It contains the demonstration
+        # file ``minimal_attention_kernel.py``, which must never shadow the
+        # package of the same name under ``src`` merely because PYTHONPATH had
+        # already added src at a lower-priority position.
+        while path in sys.path:
+            sys.path.remove(path)
+        sys.path.insert(0, path)
 
 
 def _resolve_output_base(path: str, default_dir: str = "outputs") -> Path:
