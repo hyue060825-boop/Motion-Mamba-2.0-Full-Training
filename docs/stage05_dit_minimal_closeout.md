@@ -280,7 +280,7 @@ unconditional package-level Mamba import that prevented standalone EventMemory
 use without `mamba_ssm`; it is fixed with lazy Mamba-dependent exports and a
 subprocess regression. No model architecture changed.
 
-Implementation commit: `STAGE05_IMPLEMENTATION_COMMIT` (the following
+Implementation commit: `3f6dcd6b5dfa845fcd0db779e02da4df452770c5` (the following
 provenance-only documentation commit records this immutable hash). The remote
 training checkout was a code copy without `.git`, so original training configs
 record `git_commit: UNAVAILABLE`; checkpoint/cache hashes above bind the exact
