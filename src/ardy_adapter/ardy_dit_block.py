@@ -70,6 +70,13 @@ class ArdyDiTSequenceBlock(nn.Module):
         mamba_expand: int = 2,
         mamba_chunk_size: int = 16,
         mamba_dtype: torch.dtype = torch.bfloat16,
+        token_state_interaction: Literal[
+            "naive_gated_add", "state_query", "state_kv_modulation"
+        ] = "naive_gated_add",
+        state_summary_dim: int = 128,
+        use_state_delta: bool = True,
+        state_conditioning_scale_init: float = 0.0,
+        fusion_gate_logit_init: float = 0.0,
         mamba_factory: Optional[MambaFactory] = None,
         device=None,
         **_ignored,
@@ -135,7 +142,15 @@ class ArdyDiTSequenceBlock(nn.Module):
                 allow_backend_fallback=allow_backend_fallback,
                 attention_dropout=dropout,
             )
-            config = SequenceKernelConfig(mode=kernel_mode, attention=attention)
+            config = SequenceKernelConfig(
+                mode=kernel_mode,
+                attention=attention,
+                interaction=token_state_interaction,
+                state_summary_dim=state_summary_dim,
+                use_state_delta=use_state_delta,
+                state_conditioning_scale_init=state_conditioning_scale_init,
+                fusion_gate_logit_init=fusion_gate_logit_init,
+            )
             if kernel_mode == "minimal":
                 return SequenceKernel(config)
 
@@ -178,14 +193,27 @@ class ArdyDiTSequenceBlock(nn.Module):
             mixer_factory=mixer_factory,
             dropout=dropout,
         )
-        kernel_dtype = mamba_dtype if sequence_mode == "hybrid" else torch.float32
+        # Preserve the trained Minimal/DiT stack in fp32. Mamba is constructed
+        # in its requested compute dtype and SequenceKernel owns the explicit
+        # cast at that path boundary; recurrent state and attention K/V need
+        # not share a dtype.
         if device is not None:
-            self.sequence_stack.to(device=device, dtype=kernel_dtype)
-        elif sequence_mode == "hybrid":
-            self.sequence_stack.to(dtype=kernel_dtype)
+            self.sequence_stack.to(device=device)
+        if sequence_mode == "hybrid":
+            # Optimizer-sized updates around zero (C1 beta) or a negative
+            # logit (naive control) are below bf16 resolution. Keep only
+            # these scalar coefficients in fp32; tensor paths stay bf16.
+            for layer in self.sequence_stack.layers:
+                mixer = layer.mixer
+                if mixer.uses_token_state_interaction:
+                    mixer.token_state_interaction.scale.data = (
+                        mixer.token_state_interaction.scale.data.float()
+                    )
+                else:
+                    mixer.fusion_gate_logit.data = mixer.fusion_gate_logit.data.float()
 
         self._sequence_state: Optional[DiTSequenceState] = None
-        self._accepted_commit: Optional[tuple[torch.Tensor, int]] = None
+        self._accepted_commit: Optional[tuple[torch.Tensor, int, bool]] = None
         self.read_only_forwards = 0
         self.accepted_commits = 0
 
@@ -194,7 +222,10 @@ class ArdyDiTSequenceBlock(nn.Module):
         return self.sequence_mode in {"minimal", "hybrid"}
 
     def _stack_parameter(self) -> torch.Tensor:
-        return next(self.sequence_stack.parameters())
+        # A scalar C1/fusion coefficient may intentionally remain fp32 while
+        # the tensor mixer runs bf16. Anchor ARDY tensor conversion to the
+        # actual attention projection, not arbitrary module traversal order.
+        return self.sequence_stack.layers[0].mixer.attention.q_proj.weight
 
     def _ensure_state(self, batch_size: int) -> DiTSequenceState:
         parameter = self._stack_parameter()
@@ -227,13 +258,17 @@ class ArdyDiTSequenceBlock(nn.Module):
         self._accepted_commit = None
 
     def prepare_accepted_commit(
-        self, generation_token_mask: torch.Tensor, *, chunk_id: int
+        self,
+        generation_token_mask: torch.Tensor,
+        *,
+        chunk_id: int,
+        detach: bool = True,
     ) -> None:
         if not self.has_cross_window_memory:
             return
         if generation_token_mask.dtype != torch.bool or generation_token_mask.ndim != 2:
             raise ValueError("generation_token_mask must be bool [B,T]")
-        self._accepted_commit = (generation_token_mask, chunk_id)
+        self._accepted_commit = (generation_token_mask, chunk_id, detach)
 
     def cancel_accepted_commit(self) -> None:
         self._accepted_commit = None
@@ -354,7 +389,7 @@ class ArdyDiTSequenceBlock(nn.Module):
         self.read_only_forwards += 1
 
         if self._accepted_commit is not None:
-            selection, chunk_id = self._accepted_commit
+            selection, chunk_id, detach = self._accepted_commit
             selection = selection.to(valid.device)
             if selection.shape != valid.shape:
                 raise ValueError(
@@ -371,6 +406,7 @@ class ArdyDiTSequenceBlock(nn.Module):
                 commit=True,
                 chunk_id=chunk_id,
                 current_mask=None,
+                detach_on_commit=detach,
             )
             self.accepted_commits += 1
             self._accepted_commit = None

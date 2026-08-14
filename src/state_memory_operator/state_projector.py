@@ -16,11 +16,13 @@ than a single-step snapshot.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import torch
 import torch.nn as nn
 
-from .mamba3_chunk_wrapper import Mamba3State
+if TYPE_CHECKING:
+    from .mamba3_chunk_wrapper import Mamba3State
 
 
 class StateProjector(nn.Module):
@@ -43,7 +45,7 @@ class StateProjector(nn.Module):
 
     def forward(self, ssm_state: torch.Tensor) -> torch.Tensor:
         pooled = self._pool(ssm_state)
-        flat = pooled.reshape(pooled.shape[0], -1)
+        flat = pooled.reshape(pooled.shape[0], -1).to(self.linear.weight.dtype)
         return self.norm(self.linear(flat))
 
 

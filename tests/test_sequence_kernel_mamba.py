@@ -7,7 +7,9 @@ import torch
 from conftest import requires_cuda
 
 
-def _make_real_hybrid():
+def _make_real_hybrid(
+    interaction: str = "naive_gated_add", *, use_state_delta: bool = True
+):
     from mamba_ssm.modules.mamba3 import Mamba3
     from minimal_attention_kernel import MinimalAttentionKernelConfig
     from sequence_kernel import SequenceKernel, SequenceKernelConfig
@@ -33,7 +35,13 @@ def _make_real_hybrid():
         attention_backend="sdpa",
     )
     return SequenceKernel(
-        SequenceKernelConfig(mode="hybrid", attention=attention),
+        SequenceKernelConfig(
+            mode="hybrid",
+            attention=attention,
+            interaction=interaction,
+            state_summary_dim=16,
+            use_state_delta=use_state_delta,
+        ),
         mamba3=mamba,
     ).to(device="cuda", dtype=torch.bfloat16)
 
@@ -106,3 +114,61 @@ def test_real_mamba_hybrid_forward_backward_state_cache_reset_and_ablations():
         assert bool(state.attention_cache.chunks[0].token_valid[1].any())
         assert torch.count_nonzero(state.mamba_state.ssm_state[0]) == 0
         assert torch.equal(state.mamba_state.ssm_state[1], row1_before)
+
+
+@requires_cuda
+def test_real_mamba_c1_state_query_differentiable_carry_and_no_current_leakage():
+    torch.manual_seed(29)
+    kernel = _make_real_hybrid("state_query").train()
+    state = kernel.init_state(
+        batch_size=1, device=torch.device("cuda"), dtype=torch.bfloat16
+    )
+    assert state.state_summary.shape == (1, 16)
+    assert torch.count_nonzero(state.state_delta) == 0
+
+    history = torch.randn(1, 16, 64, device="cuda", dtype=torch.bfloat16)
+    _, history_pending, _ = kernel.forward_chunk(history, state=state)
+    kernel.commit(state, history_pending, chunk_id=0, detach=False)
+    assert state.attention_cache.chunk_ids == (0,)
+    assert torch.count_nonzero(state.state_delta) > 0
+
+    kernel.token_state_interaction.scale.data.fill_(0.5)
+    current = torch.randn(
+        1, 16, 64, device="cuda", dtype=torch.bfloat16, requires_grad=True
+    )
+    output, pending, aux = kernel.forward_chunk(current, state=state)
+    assert output.shape == current.shape and torch.isfinite(output.float()).all()
+    assert aux["fusion"] == "state_query"
+    assert aux["interaction"]["query_bias_norm"] > 0
+    assert pending.state_summary.shape == state.state_summary.shape
+    output.float().square().mean().backward()
+
+    assert kernel.mamba_path.in_proj.weight.grad is not None
+    assert kernel.state_projector.linear.weight.grad is not None
+    assert kernel.token_state_interaction.state_to_address.weight.grad is not None
+    assert kernel.token_state_interaction.scale.grad is not None
+    assert kernel.attention.q_proj.weight.grad is not None
+    assert current.grad is not None and torch.isfinite(current.grad.float()).all()
+
+
+@requires_cuda
+def test_real_mamba_c1_kv_modulation_forward_backward():
+    torch.manual_seed(31)
+    kernel = _make_real_hybrid("state_kv_modulation").train()
+    state = kernel.init_state(
+        batch_size=1, device=torch.device("cuda"), dtype=torch.bfloat16
+    )
+    history = torch.randn(1, 16, 64, device="cuda", dtype=torch.bfloat16)
+    _, pending, _ = kernel.forward_chunk(history, state=state)
+    kernel.commit(state, pending, chunk_id=0, detach=False)
+    kernel.token_state_interaction.scale.data.fill_(0.5)
+    current = torch.randn(
+        1, 16, 64, device="cuda", dtype=torch.bfloat16, requires_grad=True
+    )
+    output, _, aux = kernel.forward_chunk(current, state=state)
+    scales = aux["interaction"]["chunk_key_scales"]
+    assert scales.shape == (1, 1)
+    assert not torch.equal(scales, torch.ones_like(scales))
+    output.float().square().mean().backward()
+    assert kernel.mamba_path.in_proj.weight.grad is not None
+    assert kernel.token_state_interaction.state_to_address.weight.grad is not None

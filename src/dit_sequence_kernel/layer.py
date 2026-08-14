@@ -74,6 +74,14 @@ class DiTSequenceLayer(nn.Module):
         shift_mixer, scale_mixer, gate_mixer, shift_mlp, scale_mlp, gate_mlp = modulation
 
         mixer_input = _modulate(self.norm_mixer(x), shift_mixer, scale_mixer)
+        # CUDA autocast keeps some normalization outputs in fp32 even when a
+        # Hybrid/C1 mixer is intentionally bf16. Sequence kernels enforce an
+        # exact dtype boundary because persistent K/V and recurrent state use
+        # the mixer parameter dtype.
+        mixer_parameter = self.mixer.attention.q_proj.weight
+        mixer_input = mixer_input.to(
+            device=mixer_parameter.device, dtype=mixer_parameter.dtype
+        )
         mixed, pending, aux = self.mixer.forward_chunk(
             mixer_input,
             state=state,

@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Optional
 
+import torch
+
 from minimal_attention_kernel import ChunkSlidingWindowKVCache, PendingChunkKV
 
 
@@ -33,10 +35,16 @@ class SequenceKernelState:
     attention_cache: ChunkSlidingWindowKVCache
     mamba_state: Optional[Any]
     source_kernel_id: int
+    state_summary: Optional[torch.Tensor] = None
+    state_delta: Optional[torch.Tensor] = None
 
     def detach(self) -> "SequenceKernelState":
         self.attention_cache.detach()
         self.mamba_state = _detach_optional(self.mamba_state)
+        if self.state_summary is not None:
+            self.state_summary = self.state_summary.detach()
+        if self.state_delta is not None:
+            self.state_delta = self.state_delta.detach()
         return self
 
     def clone(self) -> "SequenceKernelState":
@@ -44,6 +52,10 @@ class SequenceKernelState:
             attention_cache=self.attention_cache.clone(),
             mamba_state=_clone_optional(self.mamba_state),
             source_kernel_id=self.source_kernel_id,
+            state_summary=(
+                None if self.state_summary is None else self.state_summary.clone()
+            ),
+            state_delta=None if self.state_delta is None else self.state_delta.clone(),
         )
 
 
@@ -54,10 +66,16 @@ class PendingSequenceKernelState:
     attention_kv: Optional[PendingChunkKV]
     mamba_state: Optional[Any]
     source_kernel_id: int
+    state_summary: Optional[torch.Tensor] = None
+    state_delta: Optional[torch.Tensor] = None
 
     def detach(self) -> "PendingSequenceKernelState":
         return PendingSequenceKernelState(
             attention_kv=None if self.attention_kv is None else self.attention_kv.detach(),
             mamba_state=_detach_optional(self.mamba_state),
             source_kernel_id=self.source_kernel_id,
+            state_summary=(
+                None if self.state_summary is None else self.state_summary.detach()
+            ),
+            state_delta=None if self.state_delta is None else self.state_delta.detach(),
         )

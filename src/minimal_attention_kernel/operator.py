@@ -184,6 +184,8 @@ class MinimalAttentionKernel(nn.Module):
         chunk_id: Optional[int] = None,
         current_mask: Optional[torch.Tensor] = None,
         detach_on_commit: bool = True,
+        query_bias: Optional[torch.Tensor] = None,
+        history_chunk_scales: Optional[torch.Tensor] = None,
     ) -> tuple[torch.Tensor, PendingChunkKV, dict]:
         """Read sinks/history, attend with current K/V, and optionally commit.
 
@@ -198,7 +200,10 @@ class MinimalAttentionKernel(nn.Module):
             raise TypeError(f"x must be floating point, got {x.dtype}")
         if x.device != self.q_proj.weight.device or x.dtype != self.q_proj.weight.dtype:
             raise ValueError(
-                "x device/dtype must match kernel parameters; move/cast the kernel or input explicitly"
+                "x device/dtype must match kernel parameters; got "
+                f"x=({x.device}, {x.dtype}) and q_proj="
+                f"({self.q_proj.weight.device}, {self.q_proj.weight.dtype}); "
+                "move/cast the kernel or input explicitly"
             )
         batch_size, chunk_len, _ = x.shape
         if chunk_len == 0:
@@ -220,7 +225,18 @@ class MinimalAttentionKernel(nn.Module):
         elif commit:
             raise ValueError("commit=True requires an explicit cache")
 
-        query = self._split_heads(self.q_proj(x))
+        projected_query = self.q_proj(x)
+        if query_bias is not None:
+            expected_bias_shape = (batch_size, self.config.d_model)
+            if query_bias.shape != expected_bias_shape:
+                raise ValueError(
+                    f"query_bias must have shape {expected_bias_shape}, "
+                    f"got {tuple(query_bias.shape)}"
+                )
+            if query_bias.device != x.device or query_bias.dtype != x.dtype:
+                raise ValueError("query_bias device/dtype must match x")
+            projected_query = projected_query + query_bias[:, None, :]
+        query = self._split_heads(projected_query)
         current_key = self._split_heads(self.k_proj(x))
         current_value = self._split_heads(self.v_proj(x))
         pending = PendingChunkKV(
@@ -237,7 +253,32 @@ class MinimalAttentionKernel(nn.Module):
         )
         if do_read and cache is not None:
             history_key, history_value, history_valid = cache.get()
+            if history_chunk_scales is not None:
+                expected_scale_shape = (batch_size, cache.num_chunks)
+                if history_chunk_scales.shape != expected_scale_shape:
+                    raise ValueError(
+                        "history_chunk_scales must have shape "
+                        f"{expected_scale_shape}, got {tuple(history_chunk_scales.shape)}"
+                    )
+                if history_chunk_scales.device != x.device:
+                    raise ValueError("history_chunk_scales must be on the input device")
+                token_scales = torch.cat(
+                    [
+                        history_chunk_scales[:, index : index + 1].expand(
+                            -1, chunk.num_tokens
+                        )
+                        for index, chunk in enumerate(cache.chunks)
+                    ],
+                    dim=1,
+                ) if cache.num_chunks else history_chunk_scales.new_empty(batch_size, 0)
+                history_key = history_key * token_scales[:, None, :, None].to(
+                    history_key.dtype
+                )
         else:
+            if history_chunk_scales is not None:
+                raise ValueError(
+                    "history_chunk_scales requires do_read=True and an explicit cache"
+                )
             shape = (batch_size, self.config.num_heads, 0, self.head_dim)
             history_key = torch.empty(shape, dtype=x.dtype, device=x.device)
             history_value = torch.empty_like(history_key)
@@ -284,6 +325,16 @@ class MinimalAttentionKernel(nn.Module):
             "cache_committed": commit,
             "cached_chunks": cache.num_chunks if cache is not None else 0,
             "cached_history_tokens": cache.num_history_tokens if cache is not None else 0,
+            "query_bias_norm": (
+                None
+                if query_bias is None
+                else query_bias.detach().float().norm(dim=-1).mean().item()
+            ),
+            "history_chunk_scales": (
+                None
+                if history_chunk_scales is None
+                else history_chunk_scales.detach()
+            ),
         }
         return output, pending, aux
 

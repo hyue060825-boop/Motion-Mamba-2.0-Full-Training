@@ -104,3 +104,23 @@ def test_dit_stack_knows_only_generic_sequence_kernel_type():
     assert not any(name.startswith("state_memory_operator") for name in source_names)
     assert not any(name.startswith("mamba_ssm") for name in source_names)
     assert isinstance(stack.layers[0].mixer, SequenceKernel)
+
+
+def test_dit_explicitly_aligns_autocast_normalization_dtype_at_mixer_boundary():
+    class FloatNorm(nn.Module):
+        def forward(self, x):
+            return x.float()
+
+    stack = DiTSequenceStack(
+        d_model=32,
+        ff_size=64,
+        num_layers=1,
+        mixer_factory=_minimal_mixer,
+    ).to(dtype=torch.bfloat16)
+    stack.layers[0].norm_mixer = FloatNorm()
+    state = stack.init_state(batch_size=1, dtype=torch.bfloat16)
+    x = torch.randn(1, 4, 32, dtype=torch.bfloat16)
+    condition = torch.randn(1, 32, dtype=torch.bfloat16)
+    output, _, _ = stack(x, condition, state=state)
+    assert output.dtype == torch.bfloat16
+    assert torch.isfinite(output.float()).all()

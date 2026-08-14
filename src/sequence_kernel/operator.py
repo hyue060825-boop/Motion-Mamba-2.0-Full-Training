@@ -11,6 +11,7 @@ from minimal_attention_kernel import MinimalAttentionKernel
 
 from .config import SequenceKernelConfig
 from .state import PendingSequenceKernelState, SequenceKernelState
+from .token_state import TokenStateInteraction
 
 
 ResetFn = Callable[[Any, Optional[torch.Tensor]], Any]
@@ -51,13 +52,19 @@ class SequenceKernel(nn.Module):
         mamba3: Optional[nn.Module] = None,
         mamba_wrapper: Optional[Any] = None,
         mamba_reset_fn: Optional[ResetFn] = None,
+        state_projector: Optional[nn.Module] = None,
     ) -> None:
         super().__init__()
         self.config = config
         self.attention = MinimalAttentionKernel(config.attention)
 
         if config.mode == "minimal":
-            if mamba3 is not None or mamba_wrapper is not None or mamba_reset_fn is not None:
+            if (
+                mamba3 is not None
+                or mamba_wrapper is not None
+                or mamba_reset_fn is not None
+                or state_projector is not None
+            ):
                 raise ValueError("minimal mode accepts no Mamba objects")
             self._mamba_wrapper = None
             self._mamba_reset_fn = None
@@ -67,6 +74,8 @@ class SequenceKernel(nn.Module):
             raise ValueError("hybrid mode requires the existing Mamba3 module")
         if not isinstance(mamba3, nn.Module):
             raise TypeError("mamba3 must be a torch.nn.Module")
+        if config.interaction == "naive_gated_add" and state_projector is not None:
+            raise ValueError("naive hybrid does not use a state_projector")
 
         # The import is intentionally deferred: constructing/importing minimal
         # mode must not import either state_memory_operator or mamba_ssm.
@@ -88,9 +97,61 @@ class SequenceKernel(nn.Module):
         self.mamba_path = mamba3
         self._mamba_wrapper = mamba_wrapper
         self._mamba_reset_fn = mamba_reset_fn
-        self.fusion_gate_logit = nn.Parameter(
-            torch.tensor(float(config.fusion_gate_logit_init))
-        )
+        if config.interaction == "naive_gated_add":
+            self.fusion_gate_logit = nn.Parameter(
+                torch.tensor(float(config.fusion_gate_logit_init))
+            )
+            self.state_projector = None
+            self.token_state_interaction = None
+        else:
+            if state_projector is None:
+                from state_memory_operator.state_projector import StateProjector
+
+                nheads = getattr(mamba3, "nheads", None)
+                headdim = getattr(mamba3, "headdim", None)
+                if nheads is None or headdim is None:
+                    raise ValueError(
+                        "C1 interactions require Mamba nheads/headdim or an "
+                        "explicit state_projector"
+                    )
+                state_projector = StateProjector(
+                    nheads=nheads,
+                    headdim=headdim,
+                    d_summary=config.state_summary_dim,
+                )
+            if not isinstance(state_projector, nn.Module):
+                raise TypeError("state_projector must be a torch.nn.Module")
+            self.state_projector = state_projector
+            self.token_state_interaction = TokenStateInteraction(
+                variant=config.interaction,
+                d_model=config.d_model,
+                num_heads=config.attention.num_heads,
+                d_state_summary=config.state_summary_dim,
+                use_state_delta=config.use_state_delta,
+                scale_init=config.state_conditioning_scale_init,
+            )
+
+    @property
+    def uses_token_state_interaction(self) -> bool:
+        return self.mode == "hybrid" and self.config.interaction != "naive_gated_add"
+
+    @staticmethod
+    def _raw_summary_state(mamba_state: Any) -> torch.Tensor:
+        if isinstance(mamba_state, torch.Tensor):
+            return mamba_state
+        ssm_state = getattr(mamba_state, "ssm_state", None)
+        if isinstance(ssm_state, torch.Tensor):
+            return ssm_state
+        raise TypeError("state projector requires a tensor or a state with .ssm_state")
+
+    def _project_state(self, mamba_state: Any) -> torch.Tensor:
+        return self.state_projector(self._raw_summary_state(mamba_state))
+
+    def _mamba_parameter(self) -> torch.Tensor:
+        parameter = getattr(getattr(self.mamba_path, "in_proj", None), "weight", None)
+        if isinstance(parameter, torch.Tensor):
+            return parameter
+        return next(self.mamba_path.parameters())
 
     @property
     def mode(self) -> str:
@@ -110,15 +171,25 @@ class SequenceKernel(nn.Module):
         if self.mode == "hybrid":
             init_state = getattr(self._mamba_wrapper, "init_state", None)
             if init_state is not None:
+                mamba_parameter = self._mamba_parameter()
                 mamba_state = init_state(
                     batch_size,
-                    device=attention_cache.device,
-                    dtype=attention_cache.dtype,
+                    device=mamba_parameter.device,
+                    dtype=mamba_parameter.dtype,
                 )
+        state_summary = None
+        state_delta = None
+        if self.uses_token_state_interaction:
+            if mamba_state is None:
+                raise RuntimeError("C1 interaction requires an initialized Mamba state")
+            state_summary = self._project_state(mamba_state)
+            state_delta = torch.zeros_like(state_summary)
         return SequenceKernelState(
             attention_cache=attention_cache,
             mamba_state=mamba_state,
             source_kernel_id=id(self),
+            state_summary=state_summary,
+            state_delta=state_delta,
         )
 
     def _validate_state(self, state: SequenceKernelState, batch_size: int) -> None:
@@ -130,6 +201,10 @@ class SequenceKernel(nn.Module):
             )
         if self.mode == "minimal" and state.mamba_state is not None:
             raise ValueError("minimal state must not contain recurrent Mamba state")
+        if self.uses_token_state_interaction and (
+            state.state_summary is None or state.state_delta is None
+        ):
+            raise ValueError("C1 state requires committed state_summary and state_delta")
 
     def forward_chunk(
         self,
@@ -171,6 +246,34 @@ class SequenceKernel(nn.Module):
         attention_output = None
         attention_pending = None
         attention_aux = None
+        query_bias = None
+        history_chunk_scales = None
+        interaction_aux = None
+        if enable_attention_path and self.uses_token_state_interaction:
+            summary = state.state_summary
+            delta = state.state_delta
+            if not do_read:
+                summary = torch.zeros_like(summary)
+                delta = torch.zeros_like(delta)
+            if self.config.interaction == "state_query":
+                query_bias = self.token_state_interaction.query_bias(summary, delta).to(
+                    dtype=x.dtype
+                )
+                interaction_aux = {
+                    "query_bias_norm": query_bias.detach().float().norm(dim=-1).mean(),
+                }
+            else:
+                history_chunk_scales, raw_scores = (
+                    self.token_state_interaction.chunk_key_scales(
+                        summary,
+                        delta,
+                        state.attention_cache,
+                    )
+                )
+                interaction_aux = {
+                    "chunk_key_scales": history_chunk_scales.detach(),
+                    "chunk_key_scores": raw_scores.detach(),
+                }
         if enable_attention_path:
             attention_output, attention_pending, attention_aux = self.attention.forward_chunk(
                 x,
@@ -178,19 +281,38 @@ class SequenceKernel(nn.Module):
                 do_read=do_read,
                 commit=False,
                 current_mask=current_mask,
+                query_bias=query_bias,
+                history_chunk_scales=history_chunk_scales,
             )
 
         mamba_output = None
         next_mamba_state = None
         if enable_mamba_path:
+            mamba_parameter = self._mamba_parameter()
+            mamba_input = x.to(
+                device=mamba_parameter.device, dtype=mamba_parameter.dtype
+            )
             mamba_output, next_mamba_state = self._mamba_wrapper.forward_chunk(
-                x,
+                mamba_input,
                 state.mamba_state if do_read else None,
             )
 
+        next_state_summary = None
+        next_state_delta = None
+        if self.uses_token_state_interaction and next_mamba_state is not None:
+            next_state_summary = self._project_state(next_mamba_state)
+            next_state_delta = next_state_summary - state.state_summary
+
         if attention_output is not None and mamba_output is not None:
-            gate = torch.sigmoid(self.fusion_gate_logit).to(mamba_output.dtype)
-            output = attention_output + gate * mamba_output
+            if self.uses_token_state_interaction:
+                # Contribution-1 uses Mamba only to build the next durable
+                # address state. Content remains the attention value path.
+                output = attention_output
+            else:
+                gate = torch.sigmoid(self.fusion_gate_logit).to(mamba_output.dtype)
+                output = attention_output + (gate * mamba_output).to(
+                    attention_output.dtype
+                )
         elif attention_output is not None:
             output = attention_output
         else:
@@ -200,6 +322,8 @@ class SequenceKernel(nn.Module):
             attention_kv=attention_pending,
             mamba_state=next_mamba_state,
             source_kernel_id=id(self),
+            state_summary=next_state_summary,
+            state_delta=next_state_delta,
         )
         if commit:
             self.commit(
@@ -213,12 +337,36 @@ class SequenceKernel(nn.Module):
             "mode": self.mode,
             "attention_path_enabled": enable_attention_path,
             "mamba_path_enabled": bool(enable_mamba_path),
-            "fusion": "gated_add" if attention_output is not None and mamba_output is not None else None,
-            "fusion_gate": (
-                float(torch.sigmoid(self.fusion_gate_logit.detach()).cpu())
-                if self.mode == "hybrid"
+            "fusion": (
+                (
+                    "gated_add"
+                    if self.config.interaction == "naive_gated_add"
+                    else self.config.interaction
+                )
+                if attention_output is not None and mamba_output is not None
                 else None
             ),
+            "fusion_gate": (
+                float(torch.sigmoid(self.fusion_gate_logit.detach()).cpu())
+                if self.mode == "hybrid" and not self.uses_token_state_interaction
+                else None
+            ),
+            "state_conditioning_scale": (
+                float(self.token_state_interaction.effective_scale.detach().cpu())
+                if self.uses_token_state_interaction
+                else None
+            ),
+            "committed_state_norm": (
+                None
+                if state.state_summary is None
+                else state.state_summary.detach().float().norm(dim=-1).mean().item()
+            ),
+            "committed_delta_norm": (
+                None
+                if state.state_delta is None
+                else state.state_delta.detach().float().norm(dim=-1).mean().item()
+            ),
+            "interaction": interaction_aux,
             "attention": attention_aux,
             "state_committed": commit,
         }
@@ -249,6 +397,14 @@ class SequenceKernel(nn.Module):
             state.mamba_state = (
                 pending.mamba_state.detach() if detach else pending.mamba_state
             )
+        if pending.state_summary is not None:
+            state.state_summary = (
+                pending.state_summary.detach() if detach else pending.state_summary
+            )
+        if pending.state_delta is not None:
+            state.state_delta = (
+                pending.state_delta.detach() if detach else pending.state_delta
+            )
         return state
 
     def reset_state(
@@ -270,4 +426,12 @@ class SequenceKernel(nn.Module):
             state.mamba_state = self._mamba_reset_fn(
                 state.mamba_state, recurrent_reset_mask
             )
+            if self.uses_token_state_interaction:
+                projected = self._project_state(state.mamba_state)
+                state.state_summary = projected
+                state.state_delta = torch.where(
+                    recurrent_reset_mask[:, None],
+                    torch.zeros_like(projected),
+                    state.state_delta,
+                )
         return state

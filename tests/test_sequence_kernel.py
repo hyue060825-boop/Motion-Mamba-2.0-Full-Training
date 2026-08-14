@@ -70,6 +70,30 @@ def _make_hybrid(seed: int = 0) -> SequenceKernel:
     )
 
 
+def _make_c1(
+    interaction: str,
+    *,
+    seed: int = 0,
+    use_state_delta: bool = True,
+) -> SequenceKernel:
+    torch.manual_seed(seed)
+    mamba = FakeMamba(32)
+    projector = nn.Sequential(nn.Linear(32, 8), nn.LayerNorm(8))
+    return SequenceKernel(
+        SequenceKernelConfig(
+            mode="hybrid",
+            attention=_attention_config(),
+            interaction=interaction,
+            state_summary_dim=8,
+            use_state_delta=use_state_delta,
+            state_conditioning_scale_init=0.0,
+        ),
+        mamba3=mamba,
+        mamba_wrapper=FakeMambaWrapper(mamba),
+        state_projector=projector,
+    )
+
+
 def test_minimal_is_exact_stage1_path_and_has_zero_mamba_modules():
     torch.manual_seed(1)
     kernel = SequenceKernel(
@@ -138,6 +162,108 @@ def test_hybrid_forward_backward_shape_finite_and_explicit_fusion():
     assert kernel.fusion_gate_logit.grad is not None
     assert kernel.mamba_path.in_proj.weight.grad is not None
     assert kernel.attention.q_proj.weight.grad is not None
+
+
+@pytest.mark.parametrize("interaction", ["state_query", "state_kv_modulation"])
+def test_c1_zero_scale_is_exact_minimal_attention(interaction):
+    c1 = _make_c1(interaction, seed=13).eval()
+    minimal = SequenceKernel(
+        SequenceKernelConfig(mode="minimal", attention=_attention_config())
+    ).eval()
+    minimal.attention.load_state_dict(c1.attention.state_dict(), strict=True)
+    c1_state = c1.init_state(batch_size=1)
+    minimal_state = minimal.init_state(batch_size=1)
+
+    history = torch.randn(1, 5, 32)
+    _, c1_pending, _ = c1.forward_chunk(history, state=c1_state)
+    _, minimal_pending, _ = minimal.forward_chunk(history, state=minimal_state)
+    c1.commit(c1_state, c1_pending, chunk_id=0)
+    minimal.commit(minimal_state, minimal_pending, chunk_id=0)
+
+    current = torch.randn(1, 4, 32)
+    c1_output, _, aux = c1.forward_chunk(current, state=c1_state)
+    minimal_output, _, _ = minimal.forward_chunk(current, state=minimal_state)
+    assert torch.equal(c1_output, minimal_output)
+    assert aux["state_conditioning_scale"] == 0.0
+
+
+@pytest.mark.parametrize("interaction", ["state_query", "state_kv_modulation"])
+def test_c1_committed_state_changes_attention_without_becoming_value_payload(interaction):
+    kernel = _make_c1(interaction, seed=17).eval()
+    kernel.token_state_interaction.scale.data.fill_(1.0)
+    state = kernel.init_state(batch_size=1)
+    history = torch.randn(1, 5, 32)
+    _, pending, _ = kernel.forward_chunk(history, state=state)
+    kernel.commit(state, pending, chunk_id=0)
+    alternate = state.clone()
+    alternate.state_summary = alternate.state_summary + 3.0 * torch.randn_like(
+        alternate.state_summary
+    )
+
+    current = torch.randn(1, 4, 32)
+    baseline, _, _ = kernel.forward_chunk(current, state=state)
+    changed, _, aux = kernel.forward_chunk(current, state=alternate)
+    assert not torch.allclose(baseline, changed)
+    assert aux["interaction"] is not None
+    # C1 never constructs recurrent-state values: pending V stays the normal
+    # token projection regardless of the committed state address.
+    _, pending_a, _ = kernel.forward_chunk(current, state=state)
+    _, pending_b, _ = kernel.forward_chunk(current, state=alternate)
+    assert torch.equal(pending_a.attention_kv.value, pending_b.attention_kv.value)
+
+
+def test_c1_current_candidate_state_cannot_leak_into_current_output():
+    kernel = _make_c1("state_query", seed=19).eval()
+    kernel.token_state_interaction.scale.data.fill_(0.75)
+    state = kernel.init_state(batch_size=1)
+    current = torch.randn(1, 4, 32)
+    before, pending_before, _ = kernel.forward_chunk(current, state=state)
+    with torch.no_grad():
+        kernel.mamba_path.in_proj.weight.add_(5.0)
+        kernel.mamba_path.out_proj.weight.mul_(0.0)
+    after, pending_after, _ = kernel.forward_chunk(current, state=state)
+    assert torch.equal(before, after)
+    assert not torch.equal(pending_before.mamba_state, pending_after.mamba_state)
+
+
+@pytest.mark.parametrize("interaction", ["state_query", "state_kv_modulation"])
+def test_c1_differentiable_history_reaches_mamba_projector_interaction_and_attention(
+    interaction,
+):
+    kernel = _make_c1(interaction, seed=23).train()
+    kernel.token_state_interaction.scale.data.fill_(0.5)
+    state = kernel.init_state(batch_size=2)
+    history = torch.randn(2, 5, 32)
+    _, history_pending, _ = kernel.forward_chunk(history, state=state)
+    kernel.commit(state, history_pending, chunk_id=0, detach=False)
+    current = torch.randn(2, 4, 32, requires_grad=True)
+    output, _, _ = kernel.forward_chunk(current, state=state)
+    output.square().mean().backward()
+
+    assert kernel.mamba_path.in_proj.weight.grad is not None
+    assert kernel.state_projector[0].weight.grad is not None
+    assert kernel.token_state_interaction.state_to_address.weight.grad is not None
+    assert kernel.token_state_interaction.scale.grad is not None
+    assert kernel.attention.q_proj.weight.grad is not None
+    assert current.grad is not None and torch.isfinite(current.grad).all()
+
+
+def test_c1_state_delta_ablation_and_reset_are_explicit():
+    state_only = _make_c1("state_query", use_state_delta=False)
+    with_delta = _make_c1("state_query", use_state_delta=True)
+    assert state_only.token_state_interaction.state_to_address.in_features == 8
+    assert with_delta.token_state_interaction.state_to_address.in_features == 16
+
+    state = with_delta.init_state(batch_size=2)
+    x = torch.randn(2, 4, 32)
+    _, pending, _ = with_delta.forward_chunk(x, state=state)
+    with_delta.commit(state, pending, chunk_id=0)
+    row_one_summary = state.state_summary[1].clone()
+    row_one_delta = state.state_delta[1].clone()
+    with_delta.reset_state(state, torch.tensor([True, False]))
+    assert torch.equal(state.state_delta[0], torch.zeros_like(state.state_delta[0]))
+    assert torch.allclose(state.state_summary[1], row_one_summary)
+    assert torch.equal(state.state_delta[1], row_one_delta)
 
 
 def test_hybrid_state_and_cache_handoff_are_commit_controlled():

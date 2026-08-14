@@ -24,6 +24,13 @@ class ArdySequenceKernelConfig:
     mamba_expand: int = 2
     mamba_chunk_size: int = 16
     mamba_dtype: torch.dtype = torch.bfloat16
+    token_state_interaction: Literal[
+        "naive_gated_add", "state_query", "state_kv_modulation"
+    ] = "naive_gated_add"
+    state_summary_dim: int = 128
+    use_state_delta: bool = True
+    state_conditioning_scale_init: float = 0.0
+    fusion_gate_logit_init: float = 0.0
 
     def __post_init__(self) -> None:
         if self.mode not in {"original", "dit", "minimal", "hybrid"}:
@@ -32,6 +39,8 @@ class ArdySequenceKernelConfig:
             raise ValueError("window_size_chunks must be non-negative")
         if self.num_sink_tokens <= 0 and self.mode in {"minimal", "hybrid"}:
             raise ValueError("minimal/hybrid modes require attention sink tokens")
+        if self.mode != "hybrid" and self.token_state_interaction != "naive_gated_add":
+            raise ValueError("token/state interaction is available only in hybrid mode")
 
 
 def _copy_compatible_frontend(source: nn.Module, target: nn.Module) -> None:
@@ -109,6 +118,11 @@ def install_ardy_sequence_kernel(
         "mamba_expand": config.mamba_expand,
         "mamba_chunk_size": config.mamba_chunk_size,
         "mamba_dtype": config.mamba_dtype,
+        "token_state_interaction": config.token_state_interaction,
+        "state_summary_dim": config.state_summary_dim,
+        "use_state_delta": config.use_state_delta,
+        "state_conditioning_scale_init": config.state_conditioning_scale_init,
+        "fusion_gate_logit_init": config.fusion_gate_logit_init,
     }
     root = ArdyDiTSequenceBlock(
         output_dim=old_root.output_linear.out_features,
