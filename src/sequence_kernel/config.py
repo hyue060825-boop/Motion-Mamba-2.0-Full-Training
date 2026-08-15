@@ -10,6 +10,9 @@ from minimal_attention_kernel import MinimalAttentionKernelConfig
 from .token_state import TokenStateVariant
 
 
+InteractionVariant = TokenStateVariant | Literal["h0_parallel", "h1_innovation", "h2_delta_rule"]
+
+
 @dataclass(frozen=True)
 class SequenceKernelConfig:
     """Select the Stage-1 attention path or its explicit Mamba hybrid."""
@@ -18,7 +21,7 @@ class SequenceKernelConfig:
     attention: MinimalAttentionKernelConfig
     fusion: Literal["gated_add"] = "gated_add"
     fusion_gate_logit_init: float = 0.0
-    interaction: TokenStateVariant = "naive_gated_add"
+    interaction: InteractionVariant = "naive_gated_add"
     state_summary_dim: int = 128
     use_state_delta: bool = True
     state_conditioning_scale_init: float = 0.0
@@ -34,6 +37,9 @@ class SequenceKernelConfig:
             "naive_gated_add",
             "state_query",
             "state_kv_modulation",
+            "h0_parallel",
+            "h1_innovation",
+            "h2_delta_rule",
         }:
             raise ValueError(f"invalid token/state interaction {self.interaction!r}")
         if self.mode == "minimal" and self.interaction != "naive_gated_add":

@@ -71,7 +71,8 @@ class ArdyDiTSequenceBlock(nn.Module):
         mamba_chunk_size: int = 16,
         mamba_dtype: torch.dtype = torch.bfloat16,
         token_state_interaction: Literal[
-            "naive_gated_add", "state_query", "state_kv_modulation"
+            "naive_gated_add", "state_query", "state_kv_modulation",
+            "h0_parallel", "h1_innovation", "h2_delta_rule"
         ] = "naive_gated_add",
         state_summary_dim: int = 128,
         use_state_delta: bool = True,
@@ -208,6 +209,17 @@ class ArdyDiTSequenceBlock(nn.Module):
                 if mixer.uses_token_state_interaction:
                     mixer.token_state_interaction.scale.data = (
                         mixer.token_state_interaction.scale.data.float()
+                    )
+                elif mixer.uses_output_interaction:
+                    mixer.output_interaction.scale.data = (
+                        mixer.output_interaction.scale.data.float()
+                    )
+                elif mixer.uses_delta_rule:
+                    mixer.delta_rule.beta_logit.data = (
+                        mixer.delta_rule.beta_logit.data.float()
+                    )
+                    mixer.delta_rule.output_scale.data = (
+                        mixer.delta_rule.output_scale.data.float()
                     )
                 else:
                     mixer.fusion_gate_logit.data = mixer.fusion_gate_logit.data.float()

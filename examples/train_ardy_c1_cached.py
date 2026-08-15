@@ -38,12 +38,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--checkpoints-dir", required=True)
     parser.add_argument("--teacher-model", default="Ardy-Core-RP-20FPS-Horizon40")
     parser.add_argument("--minimal-checkpoint", required=True)
+    parser.add_argument("--mamba-checkpoint", default=None)
     parser.add_argument("--train-manifest", required=True)
     parser.add_argument("--eval-manifest", required=True)
     parser.add_argument("--output-dir", required=True)
     parser.add_argument(
         "--interaction",
-        choices=["naive_gated_add", "state_query", "state_kv_modulation"],
+        choices=[
+            "naive_gated_add", "state_query", "state_kv_modulation",
+            "h0_parallel", "h1_innovation", "h2_delta_rule",
+        ],
         required=True,
     )
     parser.add_argument(
@@ -57,6 +61,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-eval-trajectories", type=int, default=2)
     parser.add_argument("--learning-rate", type=float, default=5e-5)
     parser.add_argument("--new-parameter-lr-multiplier", type=float, default=10.0)
+    parser.add_argument(
+        "--train-new-only",
+        action="store_true",
+        help="Freeze the validated Minimal parent during the tiny C1 gate.",
+    )
     parser.add_argument("--weight-decay", type=float, default=0.0)
     parser.add_argument("--grad-clip", type=float, default=1.0)
     parser.add_argument("--window-size-chunks", type=int, default=4)
@@ -136,6 +145,8 @@ def _load_minimal(raw, checkpoint_path: str, device: torch.device) -> dict[str, 
             ".fusion_gate_logit",
             ".state_projector.",
             ".token_state_interaction.",
+            ".output_interaction.",
+            ".delta_rule.",
         )
         rejected = [key for key in incompatible.missing_keys if not any(x in key for x in allowed)]
         if rejected:
@@ -156,7 +167,10 @@ def _parameter_groups(raw) -> dict[str, list[torch.nn.Parameter]]:
         "interaction": [
             p
             for n, p in named
-            if ".token_state_interaction." in n or n.endswith("fusion_gate_logit")
+            if ".token_state_interaction." in n
+            or ".output_interaction." in n
+            or ".delta_rule." in n
+            or n.endswith("fusion_gate_logit")
         ],
         "attention": [p for n, p in named if ".attention." in n],
     }
@@ -185,6 +199,25 @@ def _interaction_snapshot(raw) -> dict[str, Any]:
                         ),
                     }
                 )
+            elif mixer.uses_output_interaction:
+                values.append(
+                    {
+                        "block": block_name,
+                        "layer": layer_index,
+                        "scale": float(mixer.output_interaction.scale.detach().cpu()),
+                    }
+                )
+            elif mixer.uses_delta_rule:
+                values.append(
+                    {
+                        "block": block_name,
+                        "layer": layer_index,
+                        "scale": float(mixer.delta_rule.beta.detach().cpu()),
+                        "output_scale": float(
+                            mixer.delta_rule.output_scale.detach().cpu()
+                        ),
+                    }
+                )
             else:
                 values.append(
                     {
@@ -194,6 +227,38 @@ def _interaction_snapshot(raw) -> dict[str, Any]:
                     }
                 )
     return {"layers": values}
+
+
+def _load_mamba_initialization(
+    raw, checkpoint_path: str, device: torch.device
+) -> dict[str, Any]:
+    checkpoint = torch.load(
+        checkpoint_path, map_location=device, weights_only=False
+    )
+    if checkpoint.get("mode") != "mamba":
+        raise ValueError("--mamba-checkpoint must contain mode='mamba'")
+    loaded = []
+    for block_name, block, source_name in (
+        ("root", raw.root_model, "root_model"),
+        ("body", raw.body_model, "body_model"),
+    ):
+        source = checkpoint[source_name]
+        for layer_index, layer in enumerate(block.sequence_stack.layers):
+            prefix = f"mamba_layers.{layer_index}."
+            state = {
+                key[len(prefix) :]: value
+                for key, value in source.items()
+                if key.startswith(prefix)
+            }
+            if not state:
+                raise RuntimeError(f"missing {block_name} Mamba layer {layer_index}")
+            layer.mixer.mamba_path.load_state_dict(state, strict=True)
+            loaded.append(f"{block_name}:{layer_index}")
+    return {
+        "checkpoint": str(Path(checkpoint_path).resolve()),
+        "sha256": _sha256(checkpoint_path),
+        "layers": loaded,
+    }
 
 
 def _save(raw, optimizer, args, output_dir: Path, step: int, metrics: dict[str, Any]) -> None:
@@ -257,29 +322,37 @@ def main() -> int:
     )
     raw = model.denoiser.model
     initialization = _load_minimal(raw, args.minimal_checkpoint, device)
+    mamba_initialization = (
+        _load_mamba_initialization(raw, args.mamba_checkpoint, device)
+        if args.mamba_checkpoint else None
+    )
     for parameter in raw.parameters():
         parameter.requires_grad_(False)
-    trainable = list(raw.root_model.parameters()) + list(raw.body_model.parameters())
-    for parameter in trainable:
-        parameter.requires_grad_(True)
     groups = _parameter_groups(raw)
     if not groups["mamba"] or not groups["interaction"] or not groups["attention"]:
         raise RuntimeError("C1 pilot is missing a required parameter group")
-    if args.interaction != "naive_gated_add" and not groups["projector"]:
+    if args.interaction in {"state_query", "state_kv_modulation"} and not groups["projector"]:
         raise RuntimeError("state-conditioned C1 pilot has no StateProjector")
     new_parameters = groups["mamba"] + groups["projector"] + groups["interaction"]
     new_ids = {id(parameter) for parameter in new_parameters}
-    base_parameters = [parameter for parameter in trainable if id(parameter) not in new_ids]
-    optimizer = torch.optim.AdamW(
-        [
-            {"params": base_parameters, "lr": args.learning_rate},
-            {
-                "params": new_parameters,
-                "lr": args.learning_rate * args.new_parameter_lr_multiplier,
-            },
-        ],
-        weight_decay=args.weight_decay,
+    all_model_parameters = list(raw.root_model.parameters()) + list(raw.body_model.parameters())
+    base_parameters = [parameter for parameter in all_model_parameters if id(parameter) not in new_ids]
+    for parameter in new_parameters:
+        parameter.requires_grad_(True)
+    if not args.train_new_only:
+        for parameter in base_parameters:
+            parameter.requires_grad_(True)
+    trainable = [parameter for parameter in all_model_parameters if parameter.requires_grad]
+    optimizer_groups = []
+    if not args.train_new_only:
+        optimizer_groups.append({"params": base_parameters, "lr": args.learning_rate})
+    optimizer_groups.append(
+        {
+            "params": new_parameters,
+            "lr": args.learning_rate * args.new_parameter_lr_multiplier,
+        }
     )
+    optimizer = torch.optim.AdamW(optimizer_groups, weight_decay=args.weight_decay)
 
     train_data = TrajectoryDataset(args.train_manifest, args.max_train_trajectories)
     eval_data = TrajectoryDataset(args.eval_manifest, args.max_eval_trajectories)
@@ -289,6 +362,7 @@ def main() -> int:
         {
             "git_commit": _git_commit(),
             "minimal_initialization": initialization,
+            "mamba_initialization": mamba_initialization,
             "train_manifest": str(Path(args.train_manifest).resolve()),
             "eval_manifest": str(Path(args.eval_manifest).resolve()),
         }
@@ -359,10 +433,15 @@ def main() -> int:
             print(json.dumps(record), flush=True)
 
     final_eval = _evaluate(raw, eval_data, device, autocast_enabled)
-    if not all(observed_gradients[name] for name in ("mamba", "interaction", "attention")):
+    required_gradient_groups = (
+        ("mamba", "interaction")
+        if args.train_new_only
+        else ("mamba", "interaction", "attention")
+    )
+    if not all(observed_gradients[name] for name in required_gradient_groups):
         raise RuntimeError(f"required C1 gradients were never observed: {observed_gradients}")
     metrics = {
-        "phase": "stage06_tiny_overfit" if args.fixed_case else "stage06_equal_budget_pilot",
+        "phase": "stage07_tiny_overfit" if args.fixed_case else "stage07_equal_budget_pilot",
         "first_train_loss": first_loss,
         "final_train_loss": final_loss,
         "initial_eval": initial_eval,
@@ -376,6 +455,7 @@ def main() -> int:
         "seed": args.seed,
         "git_commit": _git_commit(),
         "minimal_initialization": initialization,
+        "mamba_initialization": mamba_initialization,
     }
     _save(raw, optimizer, args, output_dir, args.max_steps, metrics)
     (output_dir / "result.json").write_text(json.dumps(metrics, indent=2) + "\n")

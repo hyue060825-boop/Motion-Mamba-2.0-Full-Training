@@ -25,7 +25,8 @@ class ArdySequenceKernelConfig:
     mamba_chunk_size: int = 16
     mamba_dtype: torch.dtype = torch.bfloat16
     token_state_interaction: Literal[
-        "naive_gated_add", "state_query", "state_kv_modulation"
+        "naive_gated_add", "state_query", "state_kv_modulation",
+        "h0_parallel", "h1_innovation", "h2_delta_rule"
     ] = "naive_gated_add"
     state_summary_dim: int = 128
     use_state_delta: bool = True

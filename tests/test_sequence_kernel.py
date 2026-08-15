@@ -9,9 +9,35 @@ import sys
 import pytest
 import torch
 from torch import nn
+from dataclasses import dataclass
 
 from minimal_attention_kernel import MinimalAttentionKernelConfig
 from sequence_kernel import SequenceKernel, SequenceKernelConfig
+from sequence_kernel.delta_rule import DeltaRuleStateCorrection
+
+
+@dataclass
+class _MatrixState:
+    ssm_state: torch.Tensor
+    untouched: torch.Tensor
+
+
+def test_h2_delta_rule_is_exact_zero_out_of_place_and_shape_safe():
+    adapter = DeltaRuleStateCorrection(32, 2, 4, 3)
+    original = _MatrixState(torch.randn(2, 2, 4, 3), torch.randn(2, 5))
+    token = torch.randn(2, 6, 32)
+    corrected, diagnostics = adapter.correct(original, token)
+    assert corrected is not original
+    assert torch.equal(corrected.ssm_state, original.ssm_state)
+    assert corrected.untouched is original.untouched
+    assert diagnostics["delta_norm"] > 0
+    adapter.beta_logit.data.fill_(0.2)
+    changed, _ = adapter.correct(original, token)
+    assert changed.ssm_state.shape == original.ssm_state.shape
+    assert changed.ssm_state.dtype == original.ssm_state.dtype
+    assert not torch.equal(changed.ssm_state, original.ssm_state)
+    changed.ssm_state.square().mean().backward()
+    assert adapter.beta_logit.grad is not None
 
 
 def _attention_config() -> MinimalAttentionKernelConfig:
@@ -94,6 +120,21 @@ def _make_c1(
     )
 
 
+def _make_output_interaction(interaction: str, seed: int = 0) -> SequenceKernel:
+    torch.manual_seed(seed)
+    mamba = FakeMamba(32)
+    return SequenceKernel(
+        SequenceKernelConfig(
+            mode="hybrid",
+            attention=_attention_config(),
+            interaction=interaction,
+            state_conditioning_scale_init=0.0,
+        ),
+        mamba3=mamba,
+        mamba_wrapper=FakeMambaWrapper(mamba),
+    )
+
+
 def test_minimal_is_exact_stage1_path_and_has_zero_mamba_modules():
     torch.manual_seed(1)
     kernel = SequenceKernel(
@@ -162,6 +203,31 @@ def test_hybrid_forward_backward_shape_finite_and_explicit_fusion():
     assert kernel.fusion_gate_logit.grad is not None
     assert kernel.mamba_path.in_proj.weight.grad is not None
     assert kernel.attention.q_proj.weight.grad is not None
+
+
+@pytest.mark.parametrize("interaction", ["h0_parallel", "h1_innovation"])
+def test_stage07_output_interaction_zero_init_exact_and_receives_gradients(interaction):
+    kernel = _make_output_interaction(interaction, seed=11).train()
+    state = kernel.init_state(batch_size=2)
+    x = torch.randn(2, 6, 32, requires_grad=True)
+    output, _, aux = kernel.forward_chunk(x, state=state)
+    attention, _, _ = kernel.forward_chunk(
+        x, state=state, enable_attention_path=True, enable_mamba_path=False
+    )
+
+    assert torch.equal(output, attention)
+    assert aux["fusion"] == interaction
+    assert aux["state_conditioning_scale"] == 0.0
+    assert aux["interaction"]["delta_norm"] > 0
+    output.square().mean().backward()
+    interaction_module = kernel.output_interaction
+    assert interaction_module.scale.grad is not None
+    assert torch.isfinite(interaction_module.scale.grad)
+
+    interaction_module.scale.data.fill_(0.25)
+    changed, _, changed_aux = kernel.forward_chunk(x.detach(), state=state)
+    assert not torch.equal(changed, attention.detach())
+    assert changed_aux["interaction"]["correction_norm"] > 0
 
 
 @pytest.mark.parametrize("interaction", ["state_query", "state_kv_modulation"])

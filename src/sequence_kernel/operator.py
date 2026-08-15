@@ -10,6 +10,8 @@ from torch import nn
 from minimal_attention_kernel import MinimalAttentionKernel
 
 from .config import SequenceKernelConfig
+from .delta_rule import DeltaRuleStateCorrection
+from .innovation import OutputInteraction
 from .state import PendingSequenceKernelState, SequenceKernelState
 from .token_state import TokenStateInteraction
 
@@ -74,7 +76,7 @@ class SequenceKernel(nn.Module):
             raise ValueError("hybrid mode requires the existing Mamba3 module")
         if not isinstance(mamba3, nn.Module):
             raise TypeError("mamba3 must be a torch.nn.Module")
-        if config.interaction == "naive_gated_add" and state_projector is not None:
+        if config.interaction in {"naive_gated_add", "h0_parallel", "h1_innovation", "h2_delta_rule"} and state_projector is not None:
             raise ValueError("naive hybrid does not use a state_projector")
 
         # The import is intentionally deferred: constructing/importing minimal
@@ -103,6 +105,30 @@ class SequenceKernel(nn.Module):
             )
             self.state_projector = None
             self.token_state_interaction = None
+            self.output_interaction = None
+            self.delta_rule = None
+        elif config.interaction in {"h0_parallel", "h1_innovation"}:
+            self.fusion_gate_logit = None
+            self.state_projector = None
+            self.token_state_interaction = None
+            self.output_interaction = OutputInteraction(
+                config.interaction,
+                config.d_model,
+                scale_init=config.state_conditioning_scale_init,
+            )
+            self.delta_rule = None
+        elif config.interaction == "h2_delta_rule":
+            self.fusion_gate_logit = None
+            self.state_projector = None
+            self.token_state_interaction = None
+            self.output_interaction = None
+            self.delta_rule = DeltaRuleStateCorrection(
+                config.d_model,
+                nheads=mamba3.nheads,
+                headdim=mamba3.headdim,
+                d_state=mamba3.d_state,
+                scale_init=config.state_conditioning_scale_init,
+            )
         else:
             if state_projector is None:
                 from state_memory_operator.state_projector import StateProjector
@@ -130,10 +156,22 @@ class SequenceKernel(nn.Module):
                 use_state_delta=config.use_state_delta,
                 scale_init=config.state_conditioning_scale_init,
             )
+            self.output_interaction = None
+            self.delta_rule = None
 
     @property
     def uses_token_state_interaction(self) -> bool:
-        return self.mode == "hybrid" and self.config.interaction != "naive_gated_add"
+        return self.mode == "hybrid" and self.config.interaction in {
+            "state_query", "state_kv_modulation"
+        }
+
+    @property
+    def uses_output_interaction(self) -> bool:
+        return self.mode == "hybrid" and self.output_interaction is not None
+
+    @property
+    def uses_delta_rule(self) -> bool:
+        return self.mode == "hybrid" and self.delta_rule is not None
 
     @staticmethod
     def _raw_summary_state(mamba_state: Any) -> torch.Tensor:
@@ -296,6 +334,11 @@ class SequenceKernel(nn.Module):
                 mamba_input,
                 state.mamba_state if do_read else None,
             )
+            if self.uses_delta_rule:
+                next_mamba_state, interaction_aux = self.delta_rule.correct(
+                    next_mamba_state,
+                    attention_output if attention_output is not None else x,
+                )
 
         next_state_summary = None
         next_state_delta = None
@@ -304,10 +347,18 @@ class SequenceKernel(nn.Module):
             next_state_delta = next_state_summary - state.state_summary
 
         if attention_output is not None and mamba_output is not None:
-            if self.uses_token_state_interaction:
+            if self.uses_output_interaction:
+                output, interaction_aux = self.output_interaction(
+                    attention_output, mamba_output
+                )
+            elif self.uses_token_state_interaction:
                 # Contribution-1 uses Mamba only to build the next durable
                 # address state. Content remains the attention value path.
                 output = attention_output
+            elif self.uses_delta_rule:
+                output = attention_output + (
+                    self.delta_rule.output_scale * mamba_output.float()
+                ).to(attention_output.dtype)
             else:
                 gate = torch.sigmoid(self.fusion_gate_logit).to(mamba_output.dtype)
                 output = attention_output + (gate * mamba_output).to(
@@ -348,12 +399,23 @@ class SequenceKernel(nn.Module):
             ),
             "fusion_gate": (
                 float(torch.sigmoid(self.fusion_gate_logit.detach()).cpu())
-                if self.mode == "hybrid" and not self.uses_token_state_interaction
+                if self.mode == "hybrid"
+                and self.config.interaction == "naive_gated_add"
                 else None
             ),
             "state_conditioning_scale": (
-                float(self.token_state_interaction.effective_scale.detach().cpu())
-                if self.uses_token_state_interaction
+                float(
+                    (
+                        self.output_interaction.scale
+                        if self.uses_output_interaction
+                        else (
+                            self.delta_rule.beta
+                            if self.uses_delta_rule
+                            else self.token_state_interaction.effective_scale
+                        )
+                    ).detach().cpu()
+                )
+                if self.uses_token_state_interaction or self.uses_output_interaction or self.uses_delta_rule
                 else None
             ),
             "committed_state_norm": (

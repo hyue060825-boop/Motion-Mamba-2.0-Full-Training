@@ -24,9 +24,11 @@ python examples/ardy_mamba_generate_for_viser.py \
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import numpy as np
@@ -92,7 +94,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--cfg-weight", type=float, nargs="+", default=[2.0, 2.0])
     parser.add_argument("--checkpoints-dir", default=None, help="Released ARDY checkpoint directory.")
     parser.add_argument("--ardy-root", default=str(DEFAULT_ARDY_ROOT), help="Path to the ARDY source checkout.")
+    parser.add_argument("--text-feature-sample", default=None,
+                        help="Teacher-cache sample with exact text_feat/mask for --prompt.")
     parser.add_argument("--output", default="outputs/ardy_mamba_viser", help="Output stem or folder.")
+    parser.add_argument("--metrics-output", default=None)
+    parser.add_argument("--no-postprocess", action="store_true")
     parser.add_argument("--launch-viser", action="store_true", help="Run ARDY scripts/visualize.py after saving NPZ.")
     parser.add_argument("--port", type=int, default=2334, help="Viser port when --launch-viser is set.")
     return parser.parse_args()
@@ -138,7 +144,12 @@ def main() -> int:
     model_name = args.model or DEFAULT_MODEL
     resolved_model = resolve_model_name(model_name, checkpoints_dir=checkpoints_dir)
     print(f"Loading ARDY model {resolved_model} on {device} ...")
-    model = load_model(resolved_model, device=device, checkpoints_dir=checkpoints_dir)
+    model = load_model(
+        resolved_model,
+        device=device,
+        checkpoints_dir=checkpoints_dir,
+        text_encoder=False if args.text_feature_sample else None,
+    )
 
     raw_denoiser = model.denoiser.model
     common_kwargs = dict(
@@ -165,7 +176,8 @@ def main() -> int:
     raw_denoiser.body_model = mamba_body
     assert model.denoiser.model.root_model is mamba_root
     assert model.denoiser.model.body_model is mamba_body
-    print(f"Swapped trained ArdyMambaBlock checkpoint into ARDY denoiser: step={ckpt.get('step', 'unknown')}")
+    checkpoint_step = ckpt.get("step", ckpt.get("training", {}).get("metrics", {}).get("steps", "unknown"))
+    print(f"Swapped trained ArdyMambaBlock checkpoint into ARDY denoiser: step={checkpoint_step}")
 
     fps = model.motion_rep.fps
     num_frames = int(args.duration * fps)
@@ -181,6 +193,20 @@ def main() -> int:
         history_frames = ((max_window_len - model.gen_horizon_len) // patch) * patch
 
     texts = [args.prompt.strip()] * args.num_samples
+    text_feat = None
+    text_feat_pad_mask = None
+    if args.text_feature_sample:
+        sample = torch.load(
+            Path(args.text_feature_sample).resolve(),
+            map_location="cpu",
+            weights_only=False,
+        )
+        if sample["prompt"].strip() != args.prompt.strip():
+            raise ValueError("--text-feature-sample prompt does not match --prompt")
+        text_feat = sample["text_feat"].to(device).repeat(args.num_samples, 1, 1)
+        text_feat_pad_mask = sample["text_feat_pad_mask"].to(device).repeat(
+            args.num_samples, 1
+        )
     lengths = torch.tensor([num_frames] * args.num_samples, device=device)
     pad_mask = length_to_mask(lengths)
     first_heading_angle = torch.zeros(args.num_samples, device=device)
@@ -189,6 +215,8 @@ def main() -> int:
         f"Generating with Mamba denoiser: prompt={args.prompt!r}, frames={num_frames}, "
         f"fps={fps:g}, diffusion_steps={diffusion_steps}, history_frames={history_frames}"
     )
+    torch.cuda.reset_peak_memory_stats()
+    started = time.perf_counter()
     with torch.no_grad():
         motion = model(
             texts,
@@ -200,10 +228,14 @@ def main() -> int:
             observed_motion=None,
             cfg_weight=cfg_weight,
             crop_history_length=history_frames,
+            text_feat=text_feat,
+            text_pad_mask=text_feat_pad_mask,
         )
+        torch.cuda.synchronize()
+        generation_seconds = time.perf_counter() - started
         output = model.motion_rep.inverse(motion, is_normalized=True)
 
-    if "g1" not in resolved_model.lower():
+    if not args.no_postprocess and "g1" not in resolved_model.lower():
         corrected = post_process_motion(
             output["local_rot_mats"],
             output["root_positions"],
@@ -231,6 +263,23 @@ def main() -> int:
             _save_motion_npz(npz_path, _select_sample(output, i, args.num_samples), fps, args.prompt)
             print(f"Saved Mamba NPZ: {npz_path}")
         visualize_path = out_dir
+
+    metrics = {
+        "mode": "mamba",
+        "prompt": args.prompt,
+        "seed": args.seed,
+        "frames": num_frames,
+        "chunks": int((num_frames + model.gen_horizon_len - 1) // model.gen_horizon_len),
+        "diffusion_steps": diffusion_steps,
+        "generation_seconds": generation_seconds,
+        "peak_gpu_memory_mib": torch.cuda.max_memory_allocated() / 2**20,
+        "output": str(visualize_path),
+    }
+    print(json.dumps(metrics, indent=2))
+    if args.metrics_output:
+        metrics_path = Path(args.metrics_output).resolve()
+        metrics_path.parent.mkdir(parents=True, exist_ok=True)
+        metrics_path.write_text(json.dumps(metrics, indent=2) + "\n")
 
     if args.launch_viser:
         env = os.environ.copy()
