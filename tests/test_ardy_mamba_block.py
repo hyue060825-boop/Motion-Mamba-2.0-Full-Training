@@ -148,6 +148,36 @@ def test_shape_parity_body_stage():
 
 @requires_ardy
 @requires_cuda
+def test_representation_capture_is_prediction_preserving():
+    _setup_paths()
+    from ardy_adapter.ardy_mamba_block import ArdyMambaBlock
+
+    device = torch.device("cuda")
+    block = ArdyMambaBlock(
+        add_input_proj=False, input_dim=-1, output_dim=ROOT_OUTPUT_DIM,
+        skeleton=_make_stub_skeleton(), device=device, **DENOISER_KWARGS,
+    ).to(device).eval()
+    inputs = _make_inputs(
+        1, 6, DENOISER_KWARGS["latent_dim"],
+        DENOISER_KWARGS["llm_shape"][-1], device,
+    )
+    with torch.no_grad():
+        reference = block(*inputs)
+        block.enable_representation_capture(layers=(0, DENOISER_KWARGS["num_layers"] - 1))
+        captured = block(*inputs)
+    assert torch.equal(reference, captured)
+    representations = block.captured_representations
+    assert set(representations["token_hidden"]) == {0, DENOISER_KWARGS["num_layers"] - 1}
+    assert set(representations["ssm_state_summary"]) == {
+        0, DENOISER_KWARGS["num_layers"] - 1
+    }
+    assert representations["token_hidden"][DENOISER_KWARGS["num_layers"] - 1].shape == (
+        1, 6, DENOISER_KWARGS["latent_dim"]
+    )
+
+
+@requires_ardy
+@requires_cuda
 def test_mask_parity_padded_tokens_do_not_crash():
     _setup_paths()
     from ardy_adapter.ardy_mamba_block import ArdyMambaBlock

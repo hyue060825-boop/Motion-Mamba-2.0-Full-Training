@@ -73,11 +73,19 @@ def _fit_scalar(records: list[dict[str, Any]]) -> float:
 
 def _fit_affine(records: list[dict[str, Any]]) -> torch.Tensor:
     # One global affine fusion, not a per-output lookup table.
-    minimal = torch.cat([record["minimal"] for record in records]).float()
-    mamba = torch.cat([record["mamba"] for record in records]).float()
-    target = torch.cat([record["target"] for record in records]).float()
-    design = torch.stack((minimal, mamba, torch.ones_like(minimal)), dim=1)
-    return torch.linalg.lstsq(design, target[:, None]).solution[:, 0]
+    # Accumulate the tiny normal equation in float64. A direct tall float32
+    # lstsq was ill-conditioned for millions of motion elements and silently
+    # returned near-zero weights plus a bad bias in the first Stage-08 run.
+    gram = torch.zeros(3, 3, dtype=torch.float64)
+    rhs = torch.zeros(3, dtype=torch.float64)
+    for record in records:
+        minimal = record["minimal"].double()
+        mamba = record["mamba"].double()
+        target = record["target"].double()
+        design = torch.stack((minimal, mamba, torch.ones_like(minimal)), dim=1)
+        gram += design.T @ design
+        rhs += design.T @ target
+    return torch.linalg.solve(gram, rhs).float()
 
 
 class ScalarGate(nn.Module):

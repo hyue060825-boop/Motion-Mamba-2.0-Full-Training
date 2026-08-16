@@ -168,6 +168,21 @@ class ArdyMambaBlock(nn.Module):
         self._mamba_wrappers = [Mamba3ChunkWrapper(m) for m in self.mamba_layers]
         self.mamba_norms = nn.ModuleList([nn.LayerNorm(latent_dim) for _ in range(num_layers)])
         self._mamba_dtype = mamba_dtype
+        self._capture_representations = False
+        self._capture_layers: set[int] = set()
+        self.captured_representations: dict[str, dict[int, Tensor]] = {}
+
+    def enable_representation_capture(
+        self, enabled: bool = True, layers: Optional[tuple[int, ...]] = None
+    ) -> None:
+        """Expose frozen diagnostics without changing the prediction path."""
+        self._capture_representations = enabled
+        self._capture_layers = (
+            set(range(len(self.mamba_layers))) if layers is None else set(layers)
+        )
+        if any(index < 0 or index >= len(self.mamba_layers) for index in self._capture_layers):
+            raise ValueError("capture layer index out of range")
+        self.captured_representations = {}
 
     def forward(
         self,
@@ -225,9 +240,27 @@ class ArdyMambaBlock(nn.Module):
         xseq = xseq * full_valid_mask.unsqueeze(-1).to(xseq.dtype)
 
         h = xseq.to(self._mamba_dtype)
-        for wrapper, norm in zip(self._mamba_wrappers, self.mamba_norms):
-            mixed, _ = wrapper.forward_chunk(h, None)
+        captured_hidden = {}
+        captured_state = {}
+        for layer_index, (wrapper, norm) in enumerate(
+            zip(self._mamba_wrappers, self.mamba_norms)
+        ):
+            mixed, state = wrapper.forward_chunk(h, None)
             h = norm((h.float() + mixed.float())).to(self._mamba_dtype)
+            if self._capture_representations and layer_index in self._capture_layers:
+                captured_hidden[layer_index] = h[:, pose_start_ind:].detach()
+                # This is the actual recurrent state after the complete call.
+                # The probe adds token position when aligning this chunk-level
+                # state summary back to individual token representations.
+                captured_state[layer_index] = (
+                    state.ssm_state.detach().float().mean(dim=-1)
+                )
+
+        if self._capture_representations:
+            self.captured_representations = {
+                "token_hidden": captured_hidden,
+                "ssm_state_summary": captured_state,
+            }
 
         output = h[:, pose_start_ind:].float()
         output = self.output_linear(output)
