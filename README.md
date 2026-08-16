@@ -1,36 +1,56 @@
-# Motion Mamba 2.0: ARDY-Mamba Experimental Branch
+# MotionMamba 2.0 — Baseline + C1
 
-This branch is the ARDY-Mamba experimental fork reconstructed from local logs,
-memory records, and the locally validated Mamba operator code after the server
-became unavailable.
+This branch packages the ARDY-compatible baseline interfaces and the current
+Contribution-1 research scaffold. Model weights and private training artifacts
+are intentionally not included; request the appropriate checkpoint separately.
 
-It is not a byte-for-byte snapshot of the server checkout. It is a cleaned,
-self-contained ARDY fork containing the pieces that were validated locally and
-recorded in the project memory:
+## Interfaces
 
-- slim ARDY basecode;
-- `ardy.model.ardy_mamba_block.ArdyMambaBlock`, a drop-in root/body denoiser
-  block that replaces ARDY's Transformer sequence mixer with Mamba-3;
-- `ardy.model.mamba3_chunk_wrapper.Mamba3ChunkWrapper`, the minimal Mamba-3
-  SISO chunk wrapper needed by `ArdyMambaBlock`;
-- `ardy/scripts/mamba/` distillation, quantitative evaluation, prompt-bank,
-  and viser-generation helpers.
+The generation entrypoint supports four stable modes:
 
-The default ARDY path remains transformer-based. To instantiate Mamba blocks
-inside `AutoLatentTwostageDenoiser`, set:
-
-```bash
-export ARDY_SEQUENCE_MODEL=mamba
+```text
+--original  Legacy ARDY Transformer denoiser.
+--dit       DiT denoiser without persistent cross-chunk KV or Mamba.
+--minimal   Recommended attention-only streaming baseline; Mamba is disabled.
+--hybrid    Experimental Attention-Mamba integration scaffold; Mamba is enabled.
 ```
 
-The training/eval scripts usually load the teacher ARDY model first and swap in
-`ArdyMambaBlock` explicitly, matching the verified Milestone C workflow.
+The corresponding implementation and examples live in
+`mamba-transformer-keneral/`. Run its generation entrypoint with one mode and
+the separately supplied sequence checkpoint, for example:
 
-Do not commit checkpoints, generated videos, W&B runs, caches, or private
-server paths.
+```bash
+python mamba-transformer-keneral/examples/ardy_sequence_kernel_generate.py \
+  --minimal \
+  --sequence-checkpoint /path/to/checkpoint.pt \
+  [existing ARDY generation arguments]
+```
 
-Related branches:
+Use `--dit` or `--original` in the same position for those baselines. The
+`--hybrid` path additionally requires the existing Mamba runtime and is a
+research scaffold, not the final frozen paper operator.
 
-- `main`: clean ARDY basecode.
-- `mamba-transformer-keneral`: standalone Mamba-side operator code.
-- `ardymamba`: this experimental ARDY/Mamba fork.
+## Minimal streaming contract
+
+`--minimal` combines AR diffusion, DiT, a native attention backend,
+chunk-level sliding-window KV, and attention sinks. It contains no Mamba
+module. During autoregressive diffusion:
+
+```text
+noisy denoising step       -> read memory only
+accepted clean chunk       -> commit exactly once
+new sequence / selected row -> reset its cache state
+```
+
+Cache history contains accepted clean chunks only, stays bounded by the
+configured chunk window, and keeps attention sinks separate from evictable
+history. Root/body commits are transactional: partial failure rolls both back.
+
+## Repository layout
+
+- `ardy/`: ARDY base and the previously reconstructed Mamba integration.
+- `mamba-transformer-keneral/`: complete DiT/Minimal implementation, C1
+  experiments, tests, examples, and technical documentation.
+
+No checkpoints, generated motion, W&B runs, teacher caches, or private server
+paths should be committed to this repository.
