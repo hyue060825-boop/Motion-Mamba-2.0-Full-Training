@@ -17,20 +17,6 @@ AR diffusion + DiT + native attention backend
 Its noisy denoising calls only read memory. Each accepted clean chunk commits
 exactly once, with root/body rollback on partial failure.
 
-## Completed checkpoints
-
-The large artifacts remain outside Git and are identified here for handoff:
-
-- DiT: `/workspace/ardy_stage05/outputs/dit_real_v1/sequence_dit.pt`, SHA-256
-  `39825d5b2205ee72610dd3769a46d93df6d556cd5e8faed8ccdb5e5232dd99b9`.
-- Minimal: `/workspace/ardy_stage05/outputs/minimal_real_v1/sequence_minimal.pt`,
-  SHA-256
-  `acbdcc78c6594ad690a1d3a76b129665198fd142e487a1eb64bf43163a1b949f`.
-- Real Mamba control:
-  `/workspace/ardy_stage07/mamba_real_v2_lr2e5/sequence_mamba_c1_base.pt`,
-  SHA-256
-  `cdcc3a658f221843048889a07d20329718fea963d5bf0eacddd016538fd198c1`.
-
 ## Current C1 evidence and status
 
 Attention-Mamba complementarity is supported as architecture-specific on the
