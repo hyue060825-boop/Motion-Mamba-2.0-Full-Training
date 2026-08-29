@@ -9,6 +9,7 @@ from .humanml3d import (
     load_split_ids,
     sample_control_condition,
     select_cached_caption,
+    select_manifest_caption,
     validate_ardy_features,
 )
 
@@ -21,5 +22,6 @@ __all__ = [
     "load_split_ids",
     "sample_control_condition",
     "select_cached_caption",
+    "select_manifest_caption",
     "validate_ardy_features",
 ]

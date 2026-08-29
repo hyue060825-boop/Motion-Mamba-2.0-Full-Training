@@ -99,6 +99,7 @@ class SequenceKernel(nn.Module):
         self.mamba_path = mamba3
         self._mamba_wrapper = mamba_wrapper
         self._mamba_reset_fn = mamba_reset_fn
+        self.runtime_mamba_output_scale = 1.0
         if config.interaction == "naive_gated_add":
             self.fusion_gate_logit = nn.Parameter(
                 torch.tensor(float(config.fusion_gate_logit_init))
@@ -360,7 +361,10 @@ class SequenceKernel(nn.Module):
                     self.delta_rule.output_scale * mamba_output.float()
                 ).to(attention_output.dtype)
             else:
-                gate = torch.sigmoid(self.fusion_gate_logit).to(mamba_output.dtype)
+                gate = (
+                    torch.sigmoid(self.fusion_gate_logit)
+                    * float(self.runtime_mamba_output_scale)
+                ).to(mamba_output.dtype)
                 output = attention_output + (gate * mamba_output).to(
                     attention_output.dtype
                 )
@@ -398,7 +402,12 @@ class SequenceKernel(nn.Module):
                 else None
             ),
             "fusion_gate": (
-                float(torch.sigmoid(self.fusion_gate_logit.detach()).cpu())
+                float(
+                    (
+                        torch.sigmoid(self.fusion_gate_logit.detach())
+                        * float(self.runtime_mamba_output_scale)
+                    ).cpu()
+                )
                 if self.mode == "hybrid"
                 and self.config.interaction == "naive_gated_add"
                 else None

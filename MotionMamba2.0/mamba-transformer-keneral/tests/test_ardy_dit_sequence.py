@@ -332,6 +332,88 @@ def test_diffusion_controller_commits_once_only_after_final_accepted_step(monkey
     assert controller.trace.accepted_commits == 0
 
 
+def test_controller_records_per_layer_state_and_periodically_resets_memory(monkeypatch):
+    root = _make_block(monkeypatch).eval()
+    body = _make_block(monkeypatch).eval()
+    ardy = FakeArdy(FakeRawDenoiser(root, body))
+    controller = ArdyDiffusionMemoryController(ardy).install()
+    controller.configure_rollout_diagnostics(
+        enabled=True, periodic_reset_windows=2
+    )
+
+    ardy.denoising_step(**_denoising_kwargs(0))
+    assert root._sequence_state is not None
+    first = controller.state_diagnostics[-1]
+    assert first["event"] == "generated_window"
+    assert first["periodic_reset_after_commit"] is False
+    assert len(first["blocks"]["root"]) == 2
+    assert first["blocks"]["root"][0]["attention_cache_chunks"] == 1
+
+    ardy.denoising_step(**_denoising_kwargs(0))
+    second = controller.state_diagnostics[-1]
+    assert second["periodic_reset_after_commit"] is True
+    assert second["all_finite"] is True
+    assert root._sequence_state is None and body._sequence_state is None
+    assert controller.trace.accepted_commits == 2
+
+
+def test_controller_applies_depth_dependent_mamba_output_decay(monkeypatch):
+    root = _make_block(monkeypatch).eval()
+    body = _make_block(monkeypatch).eval()
+    ardy = FakeArdy(FakeRawDenoiser(root, body))
+    controller = ArdyDiffusionMemoryController(ardy).install()
+    controller.configure_mamba_output_decay(
+        start_windows=0, half_life_windows=1, min_scale=0.4
+    )
+
+    ardy.denoising_step(**_denoising_kwargs(0))
+    assert root.sequence_stack.layers[0].mixer.runtime_mamba_output_scale == 1.0
+    ardy.denoising_step(**_denoising_kwargs(0))
+    assert root.sequence_stack.layers[0].mixer.runtime_mamba_output_scale == 0.5
+    ardy.denoising_step(**_denoising_kwargs(0))
+    assert root.sequence_stack.layers[0].mixer.runtime_mamba_output_scale == 0.4
+    controller.reset()
+    assert root.sequence_stack.layers[0].mixer.runtime_mamba_output_scale == 1.0
+
+
+def test_controller_captures_and_restores_selected_training_depths(monkeypatch):
+    root = _make_block(monkeypatch).eval()
+    body = _make_block(monkeypatch).eval()
+    ardy = FakeArdy(FakeRawDenoiser(root, body))
+    controller = ArdyDiffusionMemoryController(ardy).install()
+
+    controller.begin_training_snapshot_capture([1, 3])
+    for _ in range(3):
+        ardy.denoising_step(**_denoising_kwargs(0))
+    snapshots, history_chunks = controller.end_training_snapshot_capture()
+
+    assert sorted(snapshots) == [1, 3]
+    assert history_chunks == []  # This lightweight double has no post-window hook.
+    assert snapshots[1][0].layers[0].attention_cache.num_chunks == 1
+    assert snapshots[3][0].layers[0].attention_cache.chunk_ids == (1, 2)
+    controller.restore_training_snapshot(snapshots[1])
+    assert root._sequence_state.layers[0].attention_cache.num_chunks == 1
+    assert body._sequence_state.layers[0].attention_cache.num_chunks == 1
+    with pytest.raises(ValueError, match="unique"):
+        controller.begin_training_snapshot_capture([1, 1])
+
+
+def test_training_snapshot_reflects_periodic_reset_state(monkeypatch):
+    root = _make_block(monkeypatch).eval()
+    body = _make_block(monkeypatch).eval()
+    ardy = FakeArdy(FakeRawDenoiser(root, body))
+    controller = ArdyDiffusionMemoryController(ardy).install()
+    controller.configure_rollout_diagnostics(enabled=False, periodic_reset_windows=2)
+
+    controller.begin_training_snapshot_capture([2])
+    for _ in range(2):
+        ardy.denoising_step(**_denoising_kwargs(0))
+    snapshots, history_chunks = controller.end_training_snapshot_capture()
+
+    assert snapshots[2] == (None, None)
+    assert history_chunks == []
+
+
 def test_separated_cfg_branches_share_base_batch_history_and_commit_once(monkeypatch):
     root = _make_block(monkeypatch).eval()
     body = _make_block(monkeypatch).eval()

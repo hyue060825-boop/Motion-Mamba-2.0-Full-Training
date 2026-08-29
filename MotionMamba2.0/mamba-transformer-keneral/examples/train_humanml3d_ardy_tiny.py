@@ -27,16 +27,18 @@ for path in (
         sys.path.insert(0, path)
 
 from ardy_data import HumanML3DArdyDataset  # noqa: E402
+from ardy_adapter.history_commit import canonical_history_prime  # noqa: E402
 
 
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--manifest", required=True)
     parser.add_argument("--stats-dir", required=True)
-    parser.add_argument("--text-root", required=True)
+    parser.add_argument("--text-root", default=None)
     parser.add_argument("--text-cache", default=None)
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--mode", choices=["minimal", "hybrid"], required=True)
+    parser.add_argument("--model", default="core")
     parser.add_argument("--train-scope", choices=["mixer", "denoiser"], default="denoiser")
     parser.add_argument("--phase", choices=["tiny", "pilot"], default="tiny")
     parser.add_argument("--dev-manifest", default=None)
@@ -102,22 +104,87 @@ def _build_batch(
     fk_constraint_loss_weight: float = 0.0,
     foot_skate_loss_weight: float = 0.0,
     sequential_cache: bool = False,
+    sequential_rollout_windows: int = 2,
+    rollout_total_frames: int | None = None,
 ):
     from ardy.model.ardy_model import get_three_mask_from_len
 
     motion = batch["motion"].to(device)
     observed = batch["observed_motion"].to(device)
     motion_mask = batch["motion_mask"].to(device)
+    if rollout_total_frames is not None:
+        if rollout_total_frames <= 0 or rollout_total_frames > motion.shape[1]:
+            raise ValueError("rollout_total_frames must fit inside the sampled motion")
+        motion = motion[:, :rollout_total_frames]
+        observed = observed[:, :rollout_total_frames]
+        motion_mask = motion_mask[:, :rollout_total_frames]
+    physical_motion = model.motion_rep.unnormalize(motion)
+    rollout_motion = motion
+    rollout_observed = observed
+    rollout_motion_mask = motion_mask
+    rollout_physical_motion = physical_motion
     batch_size, frames = motion.shape[:2]
+    horizon = int(model.gen_horizon_len)
     if frames % model.hybrid.num_frames_per_token:
         raise ValueError("frame count must be divisible by the tokenizer patch size")
     lengths = torch.full((batch_size,), frames, dtype=torch.long, device=device)
     pad = torch.ones((batch_size, frames), dtype=torch.bool, device=device)
     with torch.no_grad():
         clean, _ = model.hybrid.get_hybrid_motion_from_explicit(motion, lengths, pad)
-    history_len = batch.get("history_frames", torch.zeros(batch_size, dtype=torch.long)).to(device)
-    generation_len = torch.full((batch_size,), 40, dtype=torch.long, device=device)
-    future_len = frames - history_len - generation_len
+    original_history_len = batch.get("history_frames", torch.zeros(batch_size, dtype=torch.long)).to(device)
+    if sequential_cache:
+        if sequential_rollout_windows < 2:
+            raise ValueError("sequential_rollout_windows must be at least 2")
+        expected_history_frames = (sequential_rollout_windows - 1) * horizon
+        if (
+            not bool((original_history_len == expected_history_frames).all())
+            or frames < sequential_rollout_windows * horizon
+        ):
+            raise ValueError(
+                "cache-only sequential batches require a uniform "
+                f"{expected_history_frames}-frame teacher history and "
+                f"{sequential_rollout_windows * horizon} total frames"
+            )
+        history_chunks = []
+        chunk_tokens = horizon // model.hybrid.num_frames_per_token
+        center_index = torch.full(
+            (batch_size,), horizon - 1, dtype=torch.long, device=device
+        )
+        for window_index in range(sequential_rollout_windows - 1):
+            token_start = window_index * chunk_tokens
+            token_end = token_start + chunk_tokens
+            chunk = clean[:, token_start:token_end].detach()
+            recentered, _, _ = model._recenter_history(
+                chunk, center_index, requantize=False
+            )
+            history_chunks.append(recentered.detach())
+        history_hybrid = torch.stack(history_chunks, dim=1)
+        heading_indices = torch.arange(
+            horizon - 1,
+            expected_history_frames,
+            horizon,
+            device=device,
+        )
+        history_headings = torch.atan2(
+            physical_motion[:, heading_indices, 4],
+            physical_motion[:, heading_indices, 3],
+        )
+        current_start = expected_history_frames
+        current_end = current_start + horizon
+        motion = motion[:, current_start:current_end]
+        observed = observed[:, current_start:current_end]
+        motion_mask = motion_mask[:, current_start:current_end]
+        clean = clean[:, current_start // model.hybrid.num_frames_per_token : current_end // model.hybrid.num_frames_per_token]
+        frames = motion.shape[1]
+        history_len = torch.zeros(batch_size, dtype=torch.long, device=device)
+        generation_len = torch.full((batch_size,), frames, dtype=torch.long, device=device)
+        future_len = torch.zeros_like(history_len)
+        lengths = torch.full((batch_size,), frames, dtype=torch.long, device=device)
+        pad = torch.ones((batch_size, frames), dtype=torch.bool, device=device)
+    else:
+        history_len = original_history_len
+        generation_len = torch.full((batch_size,), horizon, dtype=torch.long, device=device)
+        future_len = frames - history_len - generation_len
     if bool((future_len < 0).any()):
         raise ValueError("history + generation exceeds the training window")
     history_mask, generation_mask, future_mask = get_three_mask_from_len(
@@ -136,8 +203,8 @@ def _build_batch(
     text_mask = (~text_dropped)[:, None].expand(text.shape[:2])
     # Heading is an angle in the physical [cos, sin] representation; compute
     # it before normalization rather than applying atan2 to z-scored values.
-    physical_motion = model.motion_rep.unnormalize(motion)
-    heading = torch.atan2(physical_motion[:, 0, 4], physical_motion[:, 0, 3])
+    heading_index = int(original_history_len[0]) - 1 if sequential_cache else 0
+    heading = torch.atan2(physical_motion[:, heading_index, 4], physical_motion[:, heading_index, 3])
     with torch.no_grad():
         target_geometry = model.motion_rep.inverse(motion, is_normalized=True)
     if fixed_noise:
@@ -164,16 +231,26 @@ def _build_batch(
         "fk_constraint_loss_weight": fk_constraint_loss_weight,
         "foot_skate_loss_weight": foot_skate_loss_weight,
         "sequential_cache": sequential_cache,
+        "history_hybrid": history_hybrid if sequential_cache else None,
+        "history_headings": history_headings if sequential_cache else None,
+        "sequential_rollout_windows": sequential_rollout_windows if sequential_cache else 1,
         "motion": motion,
         "lengths": lengths,
         "pad_mask": pad,
         "hybrid_converter": model.hybrid,
         "target_joints": target_geometry["posed_joints"],
         "target_foot_contacts": target_geometry["foot_contacts"],
-        "joint_position_mask": motion_mask[:, :, 5:83].reshape(
-            batch_size, frames, 26, 3
-        ).any(dim=-1) & generation_mask[:, :, None],
+        "joint_position_mask": motion_mask[
+            :, :, model.motion_rep.slice_dict["local_joints_positions"]
+        ].reshape(batch_size, frames, model.skeleton.nbjoints - 1, 3).any(dim=-1)
+        & generation_mask[:, :, None],
         "foot_indices": list(model.skeleton.foot_joint_idx),
+        "next_generation_frames": horizon,
+        "noise": noise,
+        "rollout_motion": rollout_motion,
+        "rollout_observed": rollout_observed,
+        "rollout_motion_mask": rollout_motion_mask,
+        "rollout_physical_motion": rollout_physical_motion,
     }
 
 
@@ -209,42 +286,552 @@ def _load_denoiser_weights(raw, checkpoint: dict) -> None:
 
 
 def _prime_teacher_history(raw, fixed) -> None:
-    """Commit recentered clean history before the noisy second-window read."""
-    selection = fixed["history_token_mask"]
-    counts = selection.sum(dim=1)
-    if int(counts.min()) == 0 or not torch.equal(counts, counts[:1].expand_as(counts)):
-        raise ValueError("sequential cache batches require equal non-empty history")
-    prime_x = torch.zeros_like(fixed["target"])
-    prime_x[selection] = fixed["target"][selection]
+    """Commit teacher history chunks through the canonical history protocol."""
     model = _unwrap_raw(raw)
-    root = _unwrap_block(model.root_model)
-    body = _unwrap_block(model.body_model)
-    root.prepare_accepted_commit(selection, chunk_id=0, detach=True)
-    body.prepare_accepted_commit(selection, chunk_id=0, detach=True)
-    # Persistent projected K/V use the fp32 attention projection dtype. This
-    # commit may be called under the outer bf16 training/evaluation autocast.
-    with torch.no_grad(), torch.autocast(
-        device_type=prime_x.device.type,
-        enabled=False,
-    ):
-        raw(
-            prime_x, fixed["history_len"], fixed["generation_len"], fixed["future_len"],
-            fixed["history_mask"], fixed["generation_mask"], fixed["future_mask"],
-            fixed["history_token_mask"], fixed["generation_token_mask"],
-            fixed["future_token_mask"], fixed["text"], fixed["text_mask"],
-            torch.zeros_like(fixed["timestep"]), fixed["heading"],
-            fixed["motion_mask"], fixed["observed"],
+    histories = fixed["history_hybrid"]
+    headings = fixed["history_headings"]
+    if histories.ndim != 4 or headings.shape != histories.shape[:2]:
+        raise ValueError("multiwindow teacher history must be [B,W,T,D] with [B,W] headings")
+    root_training = model.root_model.training
+    body_training = model.body_model.training
+    model.root_model.eval()
+    model.body_model.eval()
+    try:
+        for chunk_id in range(histories.shape[1]):
+            canonical_history_prime(
+                model,
+                histories[:, chunk_id],
+                text_feat=fixed["text"],
+                text_pad_mask=fixed["text_mask"],
+                first_heading_angle=headings[:, chunk_id],
+                next_generation_frames=fixed["next_generation_frames"],
+                chunk_id=chunk_id,
+            )
+    finally:
+        model.root_model.train(root_training)
+        model.body_model.train(body_training)
+
+
+def select_generated_history_supervision_depths(
+    generated_windows: int,
+    max_points: int,
+) -> list[int]:
+    """Select generated-prefix depths covering early, window five, and final."""
+    if generated_windows <= 0:
+        raise ValueError("generated_windows must be positive")
+    if max_points <= 0:
+        raise ValueError("max_points must be positive")
+    if generated_windows <= max_points:
+        return list(range(1, generated_windows + 1))
+    if max_points == 1:
+        return [generated_windows]
+    if max_points == 2:
+        depths = {min(4, generated_windows), generated_windows}
+        if len(depths) < 2:
+            depths.add(1)
+        return sorted(depths)
+
+    depths = {1, min(4, generated_windows), generated_windows}
+    # More than three points is supported for ablations. Fill remaining slots
+    # uniformly without changing the three scientifically meaningful anchors.
+    for index in range(1, max_points + 1):
+        if len(depths) >= max_points:
+            break
+        candidate = 1 + round(
+            index * (generated_windows - 1) / max(max_points - 1, 1)
         )
-    for name, block in (("root", root), ("body", body)):
-        cache = block._sequence_state.layers[0].attention_cache
-        if cache.chunk_ids != (0,):
-            raise RuntimeError(f"{name} teacher history was not committed exactly once")
+        depths.add(min(candidate, generated_windows))
+    for candidate in range(1, generated_windows + 1):
+        if len(depths) >= max_points:
+            break
+        depths.add(candidate)
+    return sorted(depths)[:max_points]
+
+
+def _generated_supervision_batch(
+    model,
+    fixed: dict,
+    *,
+    mode: str,
+    depth: int,
+    generated_full: torch.Tensor,
+    physical: torch.Tensor,
+    full_mask: torch.Tensor,
+    seed_physical: torch.Tensor,
+    seed_hybrid,
+    seed_heading: torch.Tensor,
+    replay_history_chunks,
+    state_snapshot,
+    bptt_start_depth: int,
+    bptt_start_snapshot,
+    teacher_state_snapshot,
+    max_recovery_meters: float,
+) -> dict:
+    """Build the next-window target for one accepted generated prefix."""
+    from ardy.model.ardy_model import get_three_mask_from_len
+
+    horizon = int(model.gen_horizon_len)
+    batch_size = fixed["text"].shape[0]
+    device = fixed["text"].device
+    prefix_frames = (depth + 1) * horizon
+    target_end = prefix_frames + horizon
+    if generated_full.shape[1] < prefix_frames or physical.shape[1] < target_end:
+        raise ValueError("supervision depth exceeds generated/source rollout")
+
+    generated_prefix = generated_full[:, :prefix_frames]
+    generated_physical = model.motion_rep.unnormalize(generated_prefix)
+    generated_endpoint = generated_physical[:, -1, [0, 2]].clone()
+    teacher_endpoint = physical[:, prefix_frames - 1, [0, 2]].clone()
+    recovery = teacher_endpoint - generated_endpoint
+    raw_recovery_norm = torch.linalg.vector_norm(recovery, dim=-1)
+    if max_recovery_meters > 0:
+        scale = torch.clamp(
+            max_recovery_meters / raw_recovery_norm.clamp_min(1e-8), max=1.0
+        )
+        recovery = recovery * scale[:, None]
+    applied_recovery_norm = torch.linalg.vector_norm(recovery, dim=-1)
+
+    target_physical = physical[:, prefix_frames:target_end].clone()
+    target_physical[:, :, 0] -= teacher_endpoint[:, None, 0]
+    target_physical[:, :, 2] -= teacher_endpoint[:, None, 1]
+    target_physical[:, :, 0] += recovery[:, None, 0]
+    target_physical[:, :, 2] += recovery[:, None, 1]
+    target_motion = model.motion_rep.normalize(target_physical)
+    target_mask = full_mask[:, prefix_frames:target_end]
+
+    if mode == "original":
+        generated_local = generated_physical.clone()
+        generated_local[:, :, 0] -= generated_endpoint[:, None, 0]
+        generated_local[:, :, 2] -= generated_endpoint[:, None, 1]
+        explicit_motion = torch.cat(
+            (model.motion_rep.normalize(generated_local), target_motion), dim=1
+        )
+        motion_mask = torch.cat((full_mask[:, :prefix_frames], target_mask), dim=1)
+        history_len = torch.full(
+            (batch_size,), prefix_frames, dtype=torch.long, device=device
+        )
+        heading = torch.atan2(seed_physical[:, 0, 4], seed_physical[:, 0, 3])
+    else:
+        explicit_motion = target_motion
+        motion_mask = target_mask
+        history_len = torch.zeros(batch_size, dtype=torch.long, device=device)
+        heading = torch.atan2(generated_physical[:, -1, 4], generated_physical[:, -1, 3])
+
+    frames = explicit_motion.shape[1]
+    generation_len = torch.full(
+        (batch_size,), horizon, dtype=torch.long, device=device
+    )
+    future_len = torch.zeros_like(history_len)
+    history_mask, generation_mask, future_mask = get_three_mask_from_len(
+        history_len, generation_len, future_len, frames, device
+    )
+    history_token_mask, generation_token_mask, future_token_mask = (
+        model.hybrid.convert_frame_mask_to_token_mask(
+            history_mask, generation_mask, future_mask, motion_mask
+        )
+    )
+    lengths = torch.full((batch_size,), frames, dtype=torch.long, device=device)
+    pad = torch.ones(batch_size, frames, dtype=torch.bool, device=device)
+    clean, _ = model.hybrid.get_hybrid_motion_from_explicit(
+        explicit_motion, lengths, pad
+    )
+    noise = fixed["noise"][:, : clean.shape[1]]
+    if noise.shape != clean.shape:
+        raise RuntimeError(
+            f"generated target shape changed: noise={tuple(noise.shape)} "
+            f"clean={tuple(clean.shape)}"
+        )
+    noisy = model.diffusion.q_sample(clean, fixed["timestep"], noise)
+    x = torch.zeros_like(clean)
+    x[history_token_mask] = clean[history_token_mask]
+    x[generation_token_mask] = noisy[generation_token_mask]
+    observed_motion = explicit_motion * motion_mask.to(explicit_motion.dtype)
+    target_geometry = model.motion_rep.inverse(explicit_motion, is_normalized=True)
+
+    supervision = dict(fixed)
+    supervision.update(
+        {
+            "x": x,
+            "target": clean,
+            "history_len": history_len,
+            "generation_len": generation_len,
+            "future_len": future_len,
+            "history_mask": history_mask,
+            "generation_mask": generation_mask,
+            "future_mask": future_mask,
+            "history_token_mask": history_token_mask,
+            "generation_token_mask": generation_token_mask,
+            "future_token_mask": future_token_mask,
+            "heading": heading,
+            "motion": explicit_motion,
+            "motion_mask": motion_mask.to(dtype=fixed["motion_mask"].dtype),
+            "observed": observed_motion,
+            "lengths": lengths,
+            "pad_mask": pad,
+            "target_joints": target_geometry["posed_joints"],
+            "target_foot_contacts": target_geometry["foot_contacts"],
+            "joint_position_mask": motion_mask[
+                :, :, model.motion_rep.slice_dict["local_joints_positions"]
+            ].reshape(batch_size, frames, model.skeleton.nbjoints - 1, 3).any(dim=-1)
+            & generation_mask[:, :, None],
+            "generated_history_state_ready": mode != "original",
+            "generated_history_state_snapshot": state_snapshot,
+            "generated_history_bptt_start_depth": bptt_start_depth,
+            "generated_history_bptt_start_snapshot": bptt_start_snapshot,
+            "generated_history_teacher_state_snapshot": teacher_state_snapshot,
+            "generated_history_seed_hybrid": seed_hybrid,
+            "generated_history_seed_heading": seed_heading,
+            "generated_history_replay_chunks": replay_history_chunks,
+            "generated_history_supervision_depth": depth,
+            "generated_history_endpoint_xz": generated_endpoint,
+            "generated_history_raw_recovery_norm": raw_recovery_norm,
+            "generated_history_applied_recovery_norm": applied_recovery_norm,
+        }
+    )
+    supervision.pop("generated_history_supervision_batches", None)
+    return supervision
+
+
+@torch.no_grad()
+def _prepare_generated_history(
+    model,
+    raw,
+    client,
+    fixed,
+    *,
+    mode: str,
+    diffusion_steps: int,
+    cfg_weight_text: float,
+    cfg_weight_constraint: float,
+    max_recovery_meters: float = 0.0,
+    max_supervision_points: int = 1,
+    bptt_windows: int = 0,
+    state_consistency_weight: float = 0.0,
+    root_endpoint_loss_weight: float = 0.0,
+) -> dict:
+    """Create next-window targets at selected depths of one on-policy rollout."""
+    rollout_windows = int(fixed["sequential_rollout_windows"])
+    if rollout_windows < 3:
+        raise ValueError("generated history requires a seed, a generated window, and a target")
+    if diffusion_steps <= 0:
+        raise ValueError("generated-history diffusion steps must be positive")
+    if max_recovery_meters < 0:
+        raise ValueError("generated-history recovery cap must be non-negative")
+    if bptt_windows < 0:
+        raise ValueError("generated-history BPTT windows must be non-negative")
+    if state_consistency_weight < 0:
+        raise ValueError("generated-history state consistency weight must be non-negative")
+    if state_consistency_weight and not bptt_windows:
+        raise ValueError("state consistency requires generated-history BPTT")
+    if root_endpoint_loss_weight < 0:
+        raise ValueError("generated-history root endpoint loss weight must be non-negative")
+    supervision_depths = select_generated_history_supervision_depths(
+        rollout_windows - 2, max_supervision_points
+    )
+    bptt_start_depths = {
+        depth: max(0, depth - bptt_windows) for depth in supervision_depths
+    }
+    snapshot_depths = sorted(
+        set(supervision_depths)
+        | {depth for depth in bptt_start_depths.values() if depth > 0}
+    )
+    horizon = int(model.gen_horizon_len)
+    prefix_frames = (rollout_windows - 1) * horizon
+    batch_size = fixed["text"].shape[0]
+    device = fixed["text"].device
+    physical = fixed["rollout_physical_motion"].clone()
+    if physical.shape[1] < rollout_windows * horizon:
+        raise ValueError("generated-history source is shorter than the rollout")
+
+    # Anchor the rollout world frame at the end of the GT seed window. This is
+    # the same initial-history convention used by official Table 5.
+    seed_center = physical[:, horizon - 1, [0, 2]].clone()
+    physical[:, :, 0] -= seed_center[:, None, 0]
+    physical[:, :, 2] -= seed_center[:, None, 1]
+    normalized = model.motion_rep.normalize(physical)
+    full_mask = fixed["rollout_motion_mask"].to(dtype=torch.bool)
+    observed = normalized * full_mask.to(normalized.dtype)
+    seed_motion = normalized[:, :horizon]
+    seed_physical = physical[:, :horizon]
+    seed_heading = torch.atan2(seed_physical[:, -1, 4], seed_physical[:, -1, 3])
+    texts = [""] * batch_size
+
+    denoiser = _unwrap_raw(raw)
+    root_training = denoiser.root_model.training
+    body_training = denoiser.body_model.training
+    denoiser.root_model.eval()
+    denoiser.body_model.eval()
+    seed_hybrid = None
+    history_chunks = []
+    teacher_state_snapshots = {}
+    try:
+        if mode == "original":
+            lengths = torch.full(
+                (batch_size,), prefix_frames, dtype=torch.long, device=device
+            )
+            generated_full = model(
+                texts,
+                prefix_frames,
+                num_denoising_steps=diffusion_steps,
+                pad_mask=torch.ones(
+                    batch_size, prefix_frames, dtype=torch.bool, device=device
+                ),
+                first_heading_angle=None,
+                motion_mask=full_mask[:, :prefix_frames],
+                observed_motion=observed[:, :prefix_frames],
+                cfg_weight=(cfg_weight_text, cfg_weight_constraint),
+                crop_history_length=None,
+                init_history_sequence=seed_motion,
+                text_feat=fixed["text"],
+                text_pad_mask=fixed["text_mask"],
+                progress_bar=lambda values: values,
+            )
+        else:
+            if not hasattr(client, "controller") or client.controller is None:
+                raise RuntimeError("persistent generated history requires a memory controller")
+            client.reset_memory()
+            seed_lengths = torch.full(
+                (batch_size,), horizon, dtype=torch.long, device=device
+            )
+            seed_hybrid, _ = model.hybrid.get_hybrid_motion_from_explicit(
+                seed_motion,
+                seed_lengths,
+                torch.ones(batch_size, horizon, dtype=torch.bool, device=device),
+            )
+            controller = client.controller
+            controller.prime_accepted_history(
+                seed_hybrid,
+                text_feat=fixed["text"],
+                text_pad_mask=fixed["text_mask"],
+                first_heading_angle=seed_heading,
+            )
+            generated_frames = prefix_frames - horizon
+            controller.begin_training_snapshot_capture(snapshot_depths)
+            try:
+                generated_tail = model(
+                    texts,
+                    generated_frames,
+                    num_denoising_steps=diffusion_steps,
+                    pad_mask=torch.ones(
+                        batch_size, generated_frames, dtype=torch.bool, device=device
+                    ),
+                    first_heading_angle=seed_heading,
+                    motion_mask=full_mask[:, horizon:prefix_frames],
+                    observed_motion=observed[:, horizon:prefix_frames],
+                    cfg_weight=(cfg_weight_text, cfg_weight_constraint),
+                    crop_history_length=0,
+                    text_feat=fixed["text"],
+                    text_pad_mask=fixed["text_mask"],
+                    progress_bar=lambda values: values,
+                )
+            finally:
+                state_snapshots, history_chunks = (
+                    controller.end_training_snapshot_capture()
+                )
+            generated_full = torch.cat((seed_motion, generated_tail), dim=1)
+            expected_commits = rollout_windows - 1
+            if client.controller.trace.accepted_commits != expected_commits:
+                raise RuntimeError(
+                    "generated-history rollout did not commit the seed and every accepted window"
+                )
+            if set(state_snapshots) != set(snapshot_depths):
+                raise RuntimeError(
+                    "generated-history rollout did not capture every requested depth: "
+                    f"requested={snapshot_depths} captured={sorted(state_snapshots)}"
+                )
+            if len(history_chunks) != rollout_windows - 2:
+                raise RuntimeError(
+                    "generated-history rollout did not capture every accepted history chunk"
+                )
+            if state_consistency_weight:
+                client.reset_memory()
+                teacher_histories = fixed["history_hybrid"]
+                teacher_headings = fixed["history_headings"]
+                max_depth = max(supervision_depths)
+                for chunk_id in range(max_depth + 1):
+                    client.controller.set_runtime_mamba_output_scale_for_depth(
+                        max(0, chunk_id - 1)
+                    )
+                    canonical_history_prime(
+                        denoiser,
+                        teacher_histories[:, chunk_id],
+                        text_feat=fixed["text"],
+                        text_pad_mask=fixed["text_mask"],
+                        first_heading_angle=teacher_headings[:, chunk_id],
+                        next_generation_frames=fixed["next_generation_frames"],
+                        chunk_id=chunk_id,
+                        detach=True,
+                    )
+                    if chunk_id in supervision_depths:
+                        teacher_state_snapshots[chunk_id] = (
+                            denoiser.root_model._sequence_state.clone(),
+                            denoiser.body_model._sequence_state.clone(),
+                        )
+    finally:
+        denoiser.root_model.train(root_training)
+        denoiser.body_model.train(body_training)
+
+    # Sampling switches the diffusion object to a spaced schedule. Restore the
+    # base schedule before constructing the supervised noisy target.
+    model.diffusion.calc_diffusion_vars(
+        torch.arange(model.diffusion.num_base_steps, device=device)
+    )
+    state_snapshots = {} if mode == "original" else state_snapshots
+    supervision_batches = [
+        _generated_supervision_batch(
+            model,
+            fixed,
+            mode=mode,
+            depth=depth,
+            generated_full=generated_full,
+            physical=physical,
+            full_mask=full_mask,
+            seed_physical=seed_physical,
+            seed_hybrid=seed_hybrid,
+            seed_heading=seed_heading,
+            replay_history_chunks=history_chunks[:depth],
+            state_snapshot=state_snapshots.get(depth),
+            bptt_start_depth=bptt_start_depths[depth],
+            bptt_start_snapshot=state_snapshots.get(bptt_start_depths[depth]),
+            teacher_state_snapshot=teacher_state_snapshots.get(depth),
+            max_recovery_meters=max_recovery_meters,
+        )
+        for depth in supervision_depths
+    ]
+    fixed.update(supervision_batches[-1])
+    fixed["generated_history_supervision_batches"] = supervision_batches
+    fixed["generated_history_supervision_depths"] = supervision_depths
+    for supervision in supervision_batches:
+        supervision["generated_history_bptt_windows"] = bptt_windows
+    fixed["generated_history_bptt_windows"] = bptt_windows
+    for supervision in supervision_batches:
+        supervision["generated_history_state_consistency_weight"] = (
+            state_consistency_weight
+        )
+    fixed["generated_history_state_consistency_weight"] = state_consistency_weight
+    for supervision in supervision_batches:
+        supervision["generated_history_root_endpoint_loss_weight"] = (
+            root_endpoint_loss_weight
+        )
+    fixed["generated_history_root_endpoint_loss_weight"] = root_endpoint_loss_weight
+    return fixed
+
+
+def _prime_generated_history_bptt(raw, client, fixed) -> None:
+    """Replay accepted chunks and retain gradients through the newest writes."""
+    bptt_windows = int(fixed.get("generated_history_bptt_windows", 0))
+    chunks = fixed.get("generated_history_replay_chunks", [])
+    if bptt_windows <= 0 or not chunks:
+        raise ValueError("differentiable history replay requires chunks and a positive depth")
+    seed_hybrid = fixed.get("generated_history_seed_hybrid")
+    seed_heading = fixed.get("generated_history_seed_heading")
+    if seed_hybrid is None or seed_heading is None:
+        raise RuntimeError("differentiable history replay is missing the seed")
+    if not hasattr(client, "controller") or client.controller is None:
+        raise RuntimeError("differentiable history replay requires a memory controller")
+
+    model = _unwrap_raw(raw)
+    root_training = model.root_model.training
+    body_training = model.body_model.training
+    model.root_model.eval()
+    model.body_model.eval()
+    start_depth = int(fixed.get("generated_history_bptt_start_depth", 0))
+    start_snapshot = fixed.get("generated_history_bptt_start_snapshot")
+    if start_depth < 0 or start_depth > len(chunks):
+        raise RuntimeError("invalid differentiable history replay start depth")
+    client.reset_memory()
+    try:
+        if start_depth == 0:
+            client.controller.set_runtime_mamba_output_scale_for_depth(0)
+            canonical_history_prime(
+                model,
+                seed_hybrid,
+                text_feat=fixed["text"],
+                text_pad_mask=fixed["text_mask"],
+                first_heading_angle=seed_heading,
+                next_generation_frames=fixed["next_generation_frames"],
+                chunk_id=0,
+                detach=True,
+            )
+        else:
+            if start_snapshot is None:
+                raise RuntimeError("truncated BPTT start snapshot is missing")
+            client.controller.restore_training_snapshot(start_snapshot)
+        for index in range(start_depth, len(chunks)):
+            history_hybrid, heading = chunks[index]
+            client.controller.set_runtime_mamba_output_scale_for_depth(index)
+            canonical_history_prime(
+                model,
+                history_hybrid,
+                text_feat=fixed["text"],
+                text_pad_mask=fixed["text_mask"],
+                first_heading_angle=heading,
+                next_generation_frames=fixed["next_generation_frames"],
+                chunk_id=index + 1,
+                detach=False,
+            )
+        client.controller.set_runtime_mamba_output_scale_for_depth(len(chunks))
+    finally:
+        model.root_model.train(root_training)
+        model.body_model.train(body_training)
+
+
+def _generated_history_state_consistency(client, fixed) -> torch.Tensor:
+    weight = float(fixed.get("generated_history_state_consistency_weight", 0.0))
+    teacher = fixed.get("generated_history_teacher_state_snapshot")
+    if weight <= 0:
+        return fixed["x"].new_zeros((), dtype=torch.float32)
+    if teacher is None:
+        raise RuntimeError("state consistency target is missing")
+    losses = []
+    for block, teacher_state in zip(
+        (client.controller.root_block, client.controller.body_block), teacher
+    ):
+        current_state = block._sequence_state
+        if current_state is None or teacher_state is None:
+            raise RuntimeError("state consistency requires materialized sequence states")
+        for current_layer, teacher_layer in zip(
+            current_state.layers, teacher_state.layers
+        ):
+            current_tensors = client.controller._state_tensors(
+                current_layer.mamba_state
+            )
+            teacher_tensors = client.controller._state_tensors(
+                teacher_layer.mamba_state
+            )
+            if len(current_tensors) != len(teacher_tensors):
+                raise RuntimeError("generated/teacher Mamba state layouts differ")
+            for current_tensor, teacher_tensor in zip(
+                current_tensors, teacher_tensors
+            ):
+                target = teacher_tensor.detach().float()
+                scale = target.square().mean().clamp_min(1e-6)
+                losses.append((current_tensor.float() - target).square().mean() / scale)
+    if not losses:
+        return fixed["x"].new_zeros((), dtype=torch.float32)
+    return torch.stack(losses).mean()
 
 
 def _loss(raw, client, fixed, return_components: bool = False):
-    client.reset_memory()
-    if fixed.get("sequential_cache", False):
+    # Original ARDY has no adapter-owned persistent cache; reset is a no-op.
+    if hasattr(client, "reset_memory") and not fixed.get(
+        "generated_history_state_ready", False
+    ):
+        client.reset_memory()
+    if fixed.get("sequential_cache", False) and not fixed.get(
+        "generated_history_state_ready", False
+    ):
         _prime_teacher_history(raw, fixed)
+    bptt_windows = int(fixed.get("generated_history_bptt_windows", 0))
+    if bptt_windows > 0 and fixed.get("generated_history_state_ready", False):
+        _prime_generated_history_bptt(raw, client, fixed)
+    snapshot = fixed.get("generated_history_state_snapshot")
+    if snapshot is not None and bptt_windows == 0:
+        client.controller.restore_training_snapshot(snapshot)
+        client.controller.set_runtime_mamba_output_scale_for_depth(
+            int(fixed["generated_history_supervision_depth"])
+        )
+    state_consistency_loss = _generated_history_state_consistency(client, fixed)
     prediction = raw(
         fixed["x"], fixed["history_len"], fixed["generation_len"], fixed["future_len"],
         fixed["history_mask"], fixed["generation_mask"], fixed["future_mask"],
@@ -271,6 +858,11 @@ def _loss(raw, client, fixed, return_components: bool = False):
     root_target = fixed["target"][:, :, :root_dim].float().reshape(
         prediction.shape[0], prediction.shape[1] * nfpt, -1
     )
+    last_generation = fixed["generation_mask"].long().sum(dim=1) - 1
+    last_generation = last_generation + fixed["history_len"]
+    endpoint_prediction = root_pred[rows, last_generation][:, [0, 2]]
+    endpoint_target = root_target[rows, last_generation][:, [0, 2]]
+    root_endpoint_loss = F.mse_loss(endpoint_prediction, endpoint_target)
     # Include the history-to-generation transition. This is the actual
     # autoregressive window boundary whose velocity must remain continuous.
     velocity_mask = fixed["generation_mask"][:, 1:] & (
@@ -342,11 +934,16 @@ def _loss(raw, client, fixed, return_components: bool = False):
         + fixed["constraint_loss_weight"] * constraint_loss
         + fixed["fk_constraint_loss_weight"] * fk_constraint_loss
         + fixed["foot_skate_loss_weight"] * foot_skate_loss
+        + fixed.get("generated_history_state_consistency_weight", 0.0)
+        * state_consistency_loss
+        + fixed.get("generated_history_root_endpoint_loss_weight", 0.0)
+        * root_endpoint_loss
     )
     if return_components:
         return (
             total, root_loss, body_loss, boundary_loss, velocity_loss,
             constraint_loss, fk_constraint_loss, foot_skate_loss,
+            state_consistency_loss, root_endpoint_loss,
         )
     return total
 
@@ -415,7 +1012,8 @@ def main() -> int:
     from ardy.model import load_model
     from ardy_adapter import ArdySequenceKernelConfig, install_ardy_sequence_kernel
 
-    model = load_model("core", device=str(device), text_encoder=False)
+    model = load_model(args.model, device=str(device), text_encoder=False)
+    horizon = int(model.gen_horizon_len)
     _replace_stats(model, args.stats_dir)
     for parameter in model.parameters():
         parameter.requires_grad_(False)
@@ -441,7 +1039,7 @@ def main() -> int:
     raw.body_model.train()
     model.diffusion.calc_diffusion_vars(torch.arange(model.diffusion.num_base_steps, device=device))
     dataset = HumanML3DArdyDataset(
-        args.manifest, args.stats_dir, text_root=args.text_root, frames=args.frames, horizon=40,
+        args.manifest, args.stats_dir, text_root=args.text_root, frames=args.frames, horizon=horizon,
         condition_dropout=args.constraint_dropout, seed=args.seed, text_cache_dir=args.text_cache,
         history_probability=args.history_probability,
         text_dropout=args.text_dropout,
@@ -464,7 +1062,7 @@ def main() -> int:
     dev_fixed = []
     if args.dev_manifest:
         dev = HumanML3DArdyDataset(
-            args.dev_manifest, args.stats_dir, text_root=args.text_root, frames=args.frames, horizon=40,
+            args.dev_manifest, args.stats_dir, text_root=args.text_root, frames=args.frames, horizon=horizon,
             condition_dropout=0.0, seed=args.seed + 10000, text_cache_dir=args.text_cache,
             history_probability=args.history_probability,
             text_dropout=0.0,
@@ -544,6 +1142,7 @@ def main() -> int:
             (
                 loss, root_loss, body_loss, boundary_loss, velocity_loss,
                 constraint_loss, fk_constraint_loss, foot_skate_loss,
+                state_consistency_loss, root_endpoint_loss,
             ) = _loss(raw, client, current, return_components=True)
         if not torch.isfinite(loss):
             raise RuntimeError(f"non-finite loss at step {step}")
@@ -567,6 +1166,10 @@ def main() -> int:
                 "constraint_loss": float(constraint_loss),
                 "fk_constraint_loss": float(fk_constraint_loss),
                 "foot_skate_loss": float(foot_skate_loss),
+                "generated_history_state_consistency_loss": float(
+                    state_consistency_loss
+                ),
+                "generated_history_root_endpoint_loss": float(root_endpoint_loss),
                 "grad_norm": float(grad_norm),
             }
             with log_path.open("a") as handle:
@@ -598,6 +1201,7 @@ def main() -> int:
     metrics = {
         "status": "PASS" if passed else "FAIL",
         "mode": args.mode,
+        "model": args.model,
         "phase": args.phase,
         "steps": args.steps,
         "samples": len(batch["id"]),
@@ -620,6 +1224,7 @@ def main() -> int:
     }
     checkpoint = {
         "mode": args.mode,
+        "model": args.model,
         "root_model": _unwrap_block(_unwrap_raw(raw).root_model).state_dict(),
         "body_model": _unwrap_block(_unwrap_raw(raw).body_model).state_dict(),
         "denoiser_aux": _denoiser_aux_state(raw),

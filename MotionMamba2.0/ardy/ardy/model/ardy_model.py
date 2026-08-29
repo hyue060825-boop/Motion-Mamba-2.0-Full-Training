@@ -680,6 +680,20 @@ class Ardy(nn.Module):
                 )
                 first_heading_angle = heading_angles[:, cropped_history_start_frame]
 
+            # Optional sequence-kernel lifecycle hook. It is intentionally
+            # absent for native ARDY, preserving the original behavior. The
+            # hook runs only after recentering, translation, and next-window
+            # heading have all been resolved.
+            post_window_hook = getattr(self, "_sequence_kernel_post_window_hook", None)
+            if post_window_hook is not None:
+                post_window_hook(
+                    history_sequence,
+                    center_pos,
+                    new_root_motion,
+                    first_heading_angle,
+                    auto_step,
+                )
+
         root_motion, latent_body_motion = self.hybrid.get_root_and_latent_body_motion_from_hybrid(
             history_sequence,
         )

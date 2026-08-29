@@ -125,17 +125,23 @@ class HumanML3DArdyDataset(torch.utils.data.Dataset):
                 raise ValueError(f"expected [N,4096] text cache, got {self.text_cache.shape}")
         mean = np.load(Path(stats_dir) / "mean.npy")
         std = np.load(Path(stats_dir) / "std.npy")
-        if mean.shape != (334,) or std.shape != (334,):
-            raise ValueError(f"ARDY dual-root stats must be 334-D, got {mean.shape} and {std.shape}")
+        if mean.ndim != 1 or std.shape != mean.shape or len(mean) < 10:
+            raise ValueError(
+                f"ARDY dual-root stats must be matching 1-D arrays, got {mean.shape} and {std.shape}"
+            )
         # Explicit tensors use [global root 5, body 325], skipping local-root.
-        explicit_indices = np.r_[np.arange(5), np.arange(9, 334)]
+        explicit_indices = np.r_[np.arange(5), np.arange(9, len(mean))]
         self.mean = torch.from_numpy(mean[explicit_indices]).float()
         self.std = torch.from_numpy(std[explicit_indices]).float().clamp_min(1e-6)
 
     def __len__(self) -> int:
         return len(self.records)
 
-    def _caption(self, sample_id: str, rng: np.random.Generator) -> str:
+    def _caption(self, record: dict, rng: np.random.Generator) -> str:
+        sample_id = record["id"]
+        if record.get("captions"):
+            captions = [str(value).strip() for value in record["captions"] if str(value).strip()]
+            return captions[int(rng.integers(len(captions)))] if captions else ""
         if self.text_root is None:
             return ""
         path = self.text_root / f"{sample_id.removeprefix('M')}.txt"
@@ -152,8 +158,11 @@ class HumanML3DArdyDataset(torch.utils.data.Dataset):
         control: str | None = None,
         out_of_horizon: bool | None = None,
         force_history: bool | None = None,
+        force_history_frames: int | None = None,
     ) -> dict:
         """Return one reproducible stochastic view of a manifest record."""
+        if force_history is not None and force_history_frames is not None:
+            raise ValueError("force_history and force_history_frames are mutually exclusive")
         record = self.records[index]
         rng = np.random.default_rng(augmentation_seed)
         features = torch.from_numpy(np.load(record["feature_path"])).float()
@@ -166,17 +175,29 @@ class HumanML3DArdyDataset(torch.utils.data.Dataset):
             pad = features[-1:].expand(self.frames - length, -1)
             features = torch.cat((features, pad), dim=0)
         history_available = length >= 2 * self.horizon
-        if force_history is True and not history_available:
+        if force_history_frames is not None:
+            if force_history_frames <= 0 or force_history_frames % self.horizon:
+                raise ValueError("force_history_frames must be a positive multiple of horizon")
+            if force_history_frames + self.horizon > length:
+                raise ValueError(
+                    f"sample {record['id']} has {length} frames; forced history of "
+                    f"{force_history_frames} requires at least "
+                    f"{force_history_frames + self.horizon}"
+                )
+        elif force_history is True and not history_available:
             raise ValueError(
                 f"sample {record['id']} has {length} frames; "
                 f"forced history requires at least {2 * self.horizon}"
             )
-        use_history = (
-            force_history
-            if force_history is not None
-            else history_available and rng.random() < self.history_probability
-        )
-        history_frames = self.horizon if use_history else 0
+        if force_history_frames is not None:
+            history_frames = force_history_frames
+        else:
+            use_history = (
+                force_history
+                if force_history is not None
+                else history_available and rng.random() < self.history_probability
+            )
+            history_frames = self.horizon if use_history else 0
         if history_frames:
             features = features.clone()
             center = features[history_frames - 1, [0, 2]].clone()
@@ -206,7 +227,7 @@ class HumanML3DArdyDataset(torch.utils.data.Dataset):
         text = (
             self.text_cache_caption[record["id"]]
             if self.text_cache_caption is not None
-            else self._caption(record["id"], rng)
+            else self._caption(record, rng)
         )
         text_dropped = bool(rng.random() < self.text_dropout)
         output = {
@@ -242,6 +263,17 @@ def select_cached_caption(sample_id: str, text_root: str | Path, seed: int) -> s
     if not captions:
         return ""
     digest = hashlib.sha256(f"{seed}:{sample_id}".encode()).digest()
+    return captions[int.from_bytes(digest[:8], "little") % len(captions)]
+
+
+def select_manifest_caption(record: dict, seed: int, text_root: str | Path | None = None) -> str:
+    """Select a stable caption from either a manifest or HumanML3D text files."""
+    captions = [str(value).strip() for value in record.get("captions", []) if str(value).strip()]
+    if not captions:
+        if text_root is None:
+            return ""
+        return select_cached_caption(record["id"], text_root, seed)
+    digest = hashlib.sha256(f"{seed}:{record['id']}".encode()).digest()
     return captions[int.from_bytes(digest[:8], "little") % len(captions)]
 
 
@@ -452,8 +484,9 @@ def sample_control_condition(
     autoregressive denoiser.  This is a data contract, independent of model
     architecture, and is suitable for both Minimal and Hybrid trainers.
     """
-    if features.ndim != 2 or features.shape[-1] != 330:
-        raise ValueError(f"expected [T,330] features, got {tuple(features.shape)}")
+    if features.ndim != 2 or (features.shape[-1] - 6) % 12:
+        raise ValueError(f"expected an ARDY [T,12J+6] feature tensor, got {tuple(features.shape)}")
+    joints = (features.shape[-1] - 6) // 12
     rng = rng or np.random.default_rng()
     t = features.shape[0]
     controls = ("root_trajectory", "root_waypoint", "full_keyframe", "joint_position", "joint_rotation")
@@ -474,8 +507,10 @@ def sample_control_condition(
     mask = torch.zeros_like(features, dtype=torch.bool)
     root = slice(0, 3)
     heading = slice(3, 5)
-    local = slice(5, 83)
-    rotations = slice(83, 245)
+    local_end = 5 + (joints - 1) * 3
+    rotations_end = local_end + joints * 6
+    local = slice(5, local_end)
+    rotations = slice(local_end, rotations_end)
     if control == "root_trajectory":
         start = generation_start if not use_out else max(generation_end, frame - horizon)
         mask[start:frame + 1, 0] = True
@@ -489,15 +524,15 @@ def sample_control_condition(
         mask[frame, local] = True
         mask[frame, rotations] = True
     elif control == "joint_position":
-        joint = int(rng.integers(1, 27))
+        joint = int(rng.integers(1, joints))
         # ARDY end-effector position constraints carry root xyz and heading so
         # the relative joint position has an unambiguous world-space frame.
         mask[frame, 0:3] = True
         mask[frame, heading] = True
         mask[frame, 5 + (joint - 1) * 3:5 + joint * 3] = True
     else:
-        joint = int(rng.integers(0, 27))
-        mask[frame, 83 + joint * 6:83 + (joint + 1) * 6] = True
+        joint = int(rng.integers(0, joints))
+        mask[frame, local_end + joint * 6:local_end + (joint + 1) * 6] = True
     observed[mask] = features[mask]
     dropped = bool(rng.random() < condition_dropout)
     if dropped:
@@ -533,7 +568,7 @@ def validate_ardy_features(features: torch.Tensor, skeleton, fps: int = 20) -> d
     actual = (posed[0, :, 1:] - posed[0, :, parents[1:]]).norm(dim=-1)
     root_speed = (root[:, 1:] - root[:, :-1]).norm(dim=-1) * fps
     heading = features[:, 3:5]
-    feet = posed[0, :, [21, 22, 25, 26], 1]
+    feet = posed[0, :, list(skeleton.foot_joint_idx), 1]
     return {
         "finite": bool(torch.isfinite(features).all()),
         "roundtrip_max_abs": float((reencoded[:, :-4] - features[:, :-4]).abs().max()),
@@ -549,3 +584,16 @@ def validate_ardy_features(features: torch.Tensor, skeleton, fps: int = 20) -> d
 
 def write_manifest(records: list[dict], path: str | Path) -> None:
     Path(path).write_text("\n".join(json.dumps(record, sort_keys=True) for record in records) + "\n")
+
+
+def long_horizon_v1_window_range(draw: float) -> tuple[int, int]:
+    """Map a unit draw to the fixed protocol-aligned rollout curriculum."""
+    if not 0.0 <= draw < 1.0:
+        raise ValueError("curriculum draw must be in [0, 1)")
+    if draw < 0.50:
+        return 2, 2
+    if draw < 0.70:
+        return 4, 4
+    if draw < 0.85:
+        return 6, 10
+    return 12, 19

@@ -34,14 +34,19 @@ from train_humanml3d_ardy_tiny import _replace_stats  # noqa: E402
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=["original", "minimal", "hybrid"], required=True)
+    parser.add_argument("--model", default="core")
+    parser.add_argument("--dataset-name", default="HumanML3D")
     parser.add_argument(
         "--checkpoint",
         default=None,
-        help="Required for Minimal/Hybrid; Original uses the released ARDY weights.",
+        help=(
+            "HumanML3D-trained sequence checkpoint. Required for Minimal/Hybrid; "
+            "optional for Original (omitted Original uses Released ARDY native weights)."
+        ),
     )
     parser.add_argument("--manifest", required=True)
     parser.add_argument("--stats-dir", required=True)
-    parser.add_argument("--text-root", required=True)
+    parser.add_argument("--text-root", default=None)
     parser.add_argument("--text-cache", required=True)
     parser.add_argument("--protocol", choices=["table4", "table5_in", "table5_out"], required=True)
     parser.add_argument("--samples", type=int, default=64)
@@ -51,9 +56,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--cfg-weight-constraint", type=float, default=2.0)
     parser.add_argument(
         "--memory-mode",
-        choices=["persistent", "explicit_history"],
+        choices=["persistent", "explicit_history", "hybrid_debug"],
         default="persistent",
-        help="Disable cross-window commits for a recentered-history diagnostic.",
+        help="persistent=paper cache-only; explicit_history=diagnostic; hybrid_debug explicitly permits both.",
     )
     parser.add_argument(
         "--history-frames",
@@ -64,6 +69,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=20260818)
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--output", required=True)
+    parser.add_argument(
+        "--artifacts-output",
+        default=None,
+        help="Optional compressed same-generation geometry cache for secondary evaluators.",
+    )
     return parser.parse_args()
 
 
@@ -79,12 +89,13 @@ def _select_indices(dataset: HumanML3DArdyDataset, frames: int, count: int, seed
     return [int(value) for value in rng.choice(eligible, size=count, replace=False)]
 
 
-def _joint_from_mask(mask: torch.Tensor) -> tuple[int, int]:
-    positions = torch.nonzero(mask[:, 5:83].any(dim=-1), as_tuple=False).flatten()
+def _joint_from_mask(mask: torch.Tensor, motion_rep) -> tuple[int, int]:
+    joint_mask = mask[:, motion_rep.slice_dict["local_joints_positions"]]
+    positions = torch.nonzero(joint_mask.any(dim=-1), as_tuple=False).flatten()
     if len(positions) != 1:
         raise RuntimeError(f"expected one constrained frame, got {positions.tolist()}")
     frame = int(positions[0])
-    columns = torch.nonzero(mask[frame, 5:83], as_tuple=False).flatten()
+    columns = torch.nonzero(joint_mask[frame], as_tuple=False).flatten()
     return frame, int(columns[0] // 3) + 1
 
 
@@ -102,6 +113,28 @@ def _skate_counts(
     return int(((horizontal_speed > 0.15) & contact).sum()), contact.numel()
 
 
+def _rigid_pa_mpjpe(predicted: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    """Rigid (rotation + translation, no scale) Procrustes MPJPE in metres."""
+    source = predicted.reshape(-1, 3).float()
+    reference = target.reshape(-1, 3).float()
+    source_centered = source - source.mean(0, keepdim=True)
+    reference_centered = reference - reference.mean(0, keepdim=True)
+    u, _, vh = torch.linalg.svd(source_centered.T @ reference_centered)
+    rotation = vh.T @ u.T
+    if torch.linalg.det(rotation) < 0:
+        vh = vh.clone()
+        vh[-1] *= -1
+        rotation = vh.T @ u.T
+    aligned = source_centered @ rotation.T + reference.mean(0, keepdim=True)
+    return torch.linalg.vector_norm(aligned - reference, dim=-1).mean()
+
+
+def _angle_mae_degrees(predicted: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    relative = predicted.float().transpose(-1, -2) @ target.float()
+    cosine = ((relative.diagonal(dim1=-2, dim2=-1).sum(-1) - 1.0) / 2.0).clamp(-1, 1)
+    return torch.rad2deg(torch.acos(cosine)).mean()
+
+
 def main() -> int:
     args = parse_args()
     if args.samples < 1 or args.batch_size < 1:
@@ -116,9 +149,12 @@ def main() -> int:
     from ardy.motion_rep.tools import length_to_mask
     from ardy_adapter import ArdySequenceKernelConfig, install_ardy_sequence_kernel
 
-    model = load_model("core", device=str(device), text_encoder=False)
+    model = load_model(args.model, device=str(device), text_encoder=False)
+    horizon = int(model.gen_horizon_len)
     dataset_stats_dir = args.stats_dir
-    if args.mode != "original":
+    if args.mode != "original" or args.checkpoint is not None:
+        # A HumanML3D-trained Original checkpoint must use HumanML3D stats.
+        # Only the no-checkpoint path is the separate Released ARDY reference.
         _replace_stats(model, args.stats_dir)
     else:
         # Released ARDY weights were trained with the bundled Rigplay stats.
@@ -128,6 +164,28 @@ def main() -> int:
     raw = model.denoiser.model
     if args.mode == "original":
         client = model
+        if args.checkpoint is not None:
+            checkpoint = torch.load(args.checkpoint, map_location=device, weights_only=False)
+            if checkpoint.get("model", args.model) != args.model:
+                raise ValueError(
+                    f"checkpoint model={checkpoint.get('model')!r}, requested model={args.model!r}"
+                )
+            if checkpoint.get("mode") != "original":
+                raise ValueError(
+                    f"HumanML3D original checkpoint has mode={checkpoint.get('mode')!r}"
+                )
+            raw = model.denoiser.model
+            raw.root_model.load_state_dict(checkpoint["root_model"], strict=True)
+            raw.body_model.load_state_dict(checkpoint["body_model"], strict=True)
+            auxiliary = checkpoint.get("denoiser_aux")
+            if auxiliary is not None:
+                current = raw.state_dict()
+                unknown = set(auxiliary) - set(current)
+                if unknown:
+                    raise ValueError(f"checkpoint has unknown denoiser_aux keys: {sorted(unknown)}")
+                with torch.no_grad():
+                    for key, value in auxiliary.items():
+                        current[key].copy_(value.to(device=current[key].device, dtype=current[key].dtype))
     else:
         client = install_ardy_sequence_kernel(
             model,
@@ -139,6 +197,10 @@ def main() -> int:
             ),
         )
         checkpoint = torch.load(args.checkpoint, map_location=device, weights_only=False)
+        if checkpoint.get("model", args.model) != args.model:
+            raise ValueError(
+                f"checkpoint model={checkpoint.get('model')!r}, requested model={args.model!r}"
+            )
         raw = model.denoiser.model
         raw.root_model.load_state_dict(checkpoint["root_model"], strict=True)
         raw.body_model.load_state_dict(checkpoint["body_model"], strict=True)
@@ -156,17 +218,23 @@ def main() -> int:
     raw.root_model.eval()
     raw.body_model.eval()
 
-    frames = 40 if args.protocol == "table4" else 80
+    frames = horizon if args.protocol == "table4" else 2 * horizon
     history_frames = args.history_frames
     if history_frames is None:
-        history_frames = 0 if args.protocol == "table4" else 40
+        history_frames = 0 if args.memory_mode in {"persistent", "hybrid_debug"} else (
+            0 if args.protocol == "table4" else horizon
+        )
+    if args.mode != "original" and args.memory_mode == "persistent" and history_frames != 0:
+        raise ValueError("paper persistent evaluation is cache-only; use --memory-mode hybrid_debug for explicit history")
+    if args.mode != "original" and args.memory_mode == "hybrid_debug" and history_frames == 0:
+        raise ValueError("hybrid_debug requires explicit history_frames > 0")
     out_of_horizon = args.protocol == "table5_out"
     dataset = HumanML3DArdyDataset(
         args.manifest,
         dataset_stats_dir,
         text_root=args.text_root,
         frames=frames,
-        horizon=40,
+        horizon=horizon,
         condition_dropout=0.0,
         seed=args.seed,
         text_cache_dir=args.text_cache,
@@ -193,6 +261,17 @@ def main() -> int:
     peak_memory = 0.0
     foot_indices = list(model.skeleton.foot_joint_idx)
     fps = int(model.motion_rep.fps)
+    root_ade_cm = []
+    root_fde_cm = []
+    pa_mpjpe_cm = []
+    jitter_m_per_frame2 = []
+    angle_mae_deg = []
+    artifact_generated_joints = []
+    artifact_target_joints = []
+    artifact_generated_root = []
+    artifact_target_root = []
+    artifact_ids = []
+    artifact_texts = []
     torch.cuda.reset_peak_memory_stats(device)
 
     for start in range(0, len(samples), args.batch_size):
@@ -230,12 +309,42 @@ def main() -> int:
         target = model.motion_rep.inverse(batch["motion"].to(device), is_normalized=True)
         generated_joints = generated["posed_joints"]
         target_joints = target["posed_joints"]
+        generated_root = generated["root_positions"]
+        target_root = target["root_positions"]
+        generated_rotations = generated["local_rot_mats"]
+        target_rotations = target["local_rot_mats"]
         for row, item in enumerate(items):
-            frame, joint = _joint_from_mask(item["motion_mask"])
+            frame, joint = _joint_from_mask(item["motion_mask"], model.motion_rep)
             error_cm = torch.linalg.vector_norm(
                 generated_joints[row, frame, joint] - target_joints[row, frame, joint]
             ) * 100.0
             constraint_errors.append(float(error_cm))
+            root_distance = torch.linalg.vector_norm(
+                generated_root[row] - target_root[row], dim=-1
+            )
+            root_ade_cm.append(float(root_distance.mean() * 100.0))
+            root_fde_cm.append(float(root_distance[-1] * 100.0))
+            pa_mpjpe_cm.append(
+                float(_rigid_pa_mpjpe(generated_joints[row], target_joints[row]) * 100.0)
+            )
+            second_difference = (
+                generated_joints[row, 2:]
+                - 2.0 * generated_joints[row, 1:-1]
+                + generated_joints[row, :-2]
+            )
+            jitter_m_per_frame2.append(
+                float(torch.linalg.vector_norm(second_difference, dim=-1).mean())
+            )
+            angle_mae_deg.append(
+                float(_angle_mae_degrees(generated_rotations[row], target_rotations[row]))
+            )
+            if args.artifacts_output:
+                artifact_generated_joints.append(generated_joints[row].float().cpu().numpy())
+                artifact_target_joints.append(target_joints[row].float().cpu().numpy())
+                artifact_generated_root.append(generated_root[row].float().cpu().numpy())
+                artifact_target_root.append(target_root[row].float().cpu().numpy())
+                artifact_ids.append(item["id"])
+                artifact_texts.append(item["text"])
         bad, total = _skate_counts(
             generated_joints, generated["foot_contacts"], foot_indices, fps
         )
@@ -259,8 +368,9 @@ def main() -> int:
 
     result = {
         "status": "PASS" if all(np.isfinite(constraint_errors + root_speeds + latencies)) else "FAIL",
-        "metric_scope": "ARDY Table 4/5 proxy; learned HumanML3D evaluator unavailable",
+        "metric_scope": f"ARDY Table 4/5 proxy on {args.dataset_name}; learned official evaluator unavailable",
         "mode": args.mode,
+        "model": args.model,
         "protocol": args.protocol,
         "samples": len(samples),
         "frames": frames,
@@ -268,11 +378,22 @@ def main() -> int:
         "cfg_weight_text": args.cfg_weight_text,
         "cfg_weight_constraint": args.cfg_weight_constraint,
         "history_frames": history_frames,
-        "memory_mode": args.memory_mode,
+        # Original ARDY carries generated motion through its autoregressive
+        # history sequence; it has no adapter-owned persistent KV/Mamba state.
+        "memory_mode": "explicit_history" if args.mode == "original" else args.memory_mode,
+        "protocol_guard": (
+            "native_explicit_history" if args.mode == "original" else
+            ("paper_cache_only" if args.memory_mode == "persistent" else args.memory_mode)
+        ),
         "r_precision": None,
         "fid": None,
         "constraint_error_cm_mean": float(np.mean(constraint_errors)),
         "constraint_error_cm_median": float(np.median(constraint_errors)),
+        "mobench_root_ade_cm_mean": float(np.mean(root_ade_cm)),
+        "mobench_root_fde_cm_mean": float(np.mean(root_fde_cm)),
+        "mobench_pa_mpjpe_cm_mean": float(np.mean(pa_mpjpe_cm)),
+        "mobench_jitter_m_per_frame2_mean": float(np.mean(jitter_m_per_frame2)),
+        "mobench_angle_mae_deg_mean": float(np.mean(angle_mae_deg)),
         "skate_percent_proxy": 100.0 * sliding / max(contacts, 1),
         "latency_seconds_per_sample": float(np.mean(latencies)),
         "peak_gpu_memory_mib": peak_memory,
@@ -301,6 +422,18 @@ def main() -> int:
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(result, indent=2) + "\n")
+    if args.artifacts_output:
+        artifact_path = Path(args.artifacts_output)
+        artifact_path.parent.mkdir(parents=True, exist_ok=True)
+        np.savez_compressed(
+            artifact_path,
+            generated_joints=np.stack(artifact_generated_joints),
+            target_joints=np.stack(artifact_target_joints),
+            generated_root=np.stack(artifact_generated_root),
+            target_root=np.stack(artifact_target_root),
+            sample_ids=np.asarray(artifact_ids),
+            texts=np.asarray(artifact_texts),
+        )
     print(json.dumps(result, indent=2))
     return 0 if result["status"] == "PASS" else 1
 

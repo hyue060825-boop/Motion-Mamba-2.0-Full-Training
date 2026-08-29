@@ -15,15 +15,17 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "src"))
 sys.path.insert(0, str(REPO.parents[0] / "ardy"))
 
-from ardy_data import select_cached_caption  # noqa: E402
+from ardy_data import select_manifest_caption  # noqa: E402
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--manifest", action="append", required=True)
-    parser.add_argument("--text-root", required=True)
+    parser.add_argument("--text-root", default=None)
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--device", default="cuda:0")
+    parser.add_argument("--encoder-mode", choices=["local", "api"], default="local")
+    parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--seed", type=int, default=123)
     parser.add_argument("--flush-every", type=int, default=100)
     parser.add_argument("--max-samples", type=int, default=None)
@@ -39,7 +41,7 @@ def main() -> int:
                 seen.add(record["id"])
     if args.max_samples is not None:
         records = records[:args.max_samples]
-    captions = [select_cached_caption(record["id"], args.text_root, args.seed) for record in records]
+    captions = [select_manifest_caption(record, args.seed, args.text_root) for record in records]
     if not all(captions):
         raise ValueError("all cached samples must have a non-empty caption")
 
@@ -60,20 +62,22 @@ def main() -> int:
 
     from ardy.model.load_model import load_text_encoder
 
-    encoder = load_text_encoder(mode="local", device=args.device)
+    encoder = load_text_encoder(mode=args.encoder_mode, device=args.device)
     started = time.perf_counter()
-    for index in range(start, len(records)):
+    for batch_start in range(start, len(records), args.batch_size):
+        batch_end = min(batch_start + args.batch_size, len(records))
         with torch.inference_mode():
-            feature, lengths = encoder([captions[index]])
-        if lengths != [1] or feature.shape != (1, 1, 4096) or not torch.isfinite(feature).all():
-            raise RuntimeError(f"invalid text embedding at row {index}")
-        embeddings[index] = feature[0, 0].float().cpu().numpy().astype(np.float16)
-        if (index + 1) % args.flush_every == 0 or index + 1 == len(records):
+            feature, lengths = encoder(captions[batch_start:batch_end])
+        expected_shape = (batch_end - batch_start, 1, 4096)
+        if lengths != [1] * (batch_end - batch_start) or feature.shape != expected_shape or not torch.isfinite(feature).all():
+            raise RuntimeError(f"invalid text embedding for rows {batch_start}:{batch_end}")
+        embeddings[batch_start:batch_end] = feature[:, 0].float().cpu().numpy().astype(np.float16)
+        if batch_end % args.flush_every < args.batch_size or batch_end == len(records):
             embeddings.flush()
-            progress_path.write_text(json.dumps({"completed": index + 1, "total": len(records)}) + "\n")
+            progress_path.write_text(json.dumps({"completed": batch_end, "total": len(records)}) + "\n")
             elapsed = time.perf_counter() - started
-            rate = (index + 1 - start) / max(elapsed, 1e-9)
-            print(json.dumps({"completed": index + 1, "total": len(records), "samples_per_second": rate}), flush=True)
+            rate = (batch_end - start) / max(elapsed, 1e-9)
+            print(json.dumps({"completed": batch_end, "total": len(records), "samples_per_second": rate}), flush=True)
 
     samples = [
         {"id": record["id"], "row": index, "caption": captions[index]}

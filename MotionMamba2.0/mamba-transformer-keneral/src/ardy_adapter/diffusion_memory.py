@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import inspect
-import types
 from dataclasses import dataclass
 from typing import Any, Optional
 
 import torch
 
 from .ardy_dit_block import ArdyDiTSequenceBlock
+from .history_commit import canonical_history_prime
 
 
 @dataclass(frozen=True)
@@ -50,8 +50,23 @@ class ArdyDiffusionMemoryController:
         # A clean t=0 prediction is only eligible for memory after ARDY has
         # recentered the completed window. Committing inside denoising_step
         # stores the pre-recenter coordinate frame and causes boundary jumps.
-        self._pending_commit: Optional[tuple[torch.Tensor, dict[str, Any]]] = None
-        self._original_recenter_history = getattr(ardy_model, "_recenter_history", None)
+        self._original_post_window_hook = getattr(
+            ardy_model, "_sequence_kernel_post_window_hook", None
+        )
+        self._supports_post_window_hook = hasattr(ardy_model, "_recenter_history")
+        self._last_text_feat: Optional[torch.Tensor] = None
+        self._last_text_pad_mask: Optional[torch.Tensor] = None
+        self.periodic_reset_windows = 0
+        self.record_state_diagnostics = False
+        self.state_diagnostics: list[dict[str, Any]] = []
+        self._previous_mamba_states: dict[str, list[Any]] = {}
+        self._capture_training_snapshots = False
+        self._training_snapshot_depths: set[int] = set()
+        self.training_state_snapshots: dict[int, tuple[Any, Any]] = {}
+        self.training_history_chunks: list[tuple[torch.Tensor, torch.Tensor]] = []
+        self.mamba_output_decay_start_windows = 0
+        self.mamba_output_decay_half_life_windows = 0.0
+        self.mamba_output_decay_min_scale = 0.0
 
     @property
     def trace(self) -> DiffusionMemoryTrace:
@@ -73,7 +88,247 @@ class ArdyDiffusionMemoryController:
             self._completed_windows = 0
             self._accepted_commits = 0
             self._last_sampling_timestep = None
-            self._pending_commit = None
+            self._previous_mamba_states.clear()
+            self._capture_training_snapshots = False
+            self._training_snapshot_depths.clear()
+            self.training_state_snapshots.clear()
+            self.training_history_chunks.clear()
+            self._set_runtime_mamba_output_scale(1.0)
+
+    def configure_mamba_output_decay(
+        self,
+        *,
+        start_windows: int = 0,
+        half_life_windows: float = 0.0,
+        min_scale: float = 0.0,
+    ) -> None:
+        """Decay only Hybrid's Mamba readout after a chosen rollout depth."""
+        if start_windows < 0 or half_life_windows < 0:
+            raise ValueError("Mamba output decay settings must be non-negative")
+        if not 0.0 <= min_scale <= 1.0:
+            raise ValueError("Mamba output decay minimum scale must be in [0, 1]")
+        self.mamba_output_decay_start_windows = start_windows
+        self.mamba_output_decay_half_life_windows = half_life_windows
+        self.mamba_output_decay_min_scale = min_scale
+        self._set_runtime_mamba_output_scale(1.0)
+
+    def _set_runtime_mamba_output_scale(self, scale: float) -> None:
+        for block in (self.root_block, self.body_block):
+            for layer in block.sequence_stack.layers:
+                layer.mixer.runtime_mamba_output_scale = float(scale)
+
+    def _update_runtime_mamba_output_scale(self) -> None:
+        self.set_runtime_mamba_output_scale_for_depth(self._completed_windows)
+
+    def set_runtime_mamba_output_scale_for_depth(
+        self, completed_windows: int
+    ) -> None:
+        if completed_windows < 0:
+            raise ValueError("completed_windows must be non-negative")
+        half_life = self.mamba_output_decay_half_life_windows
+        if not half_life:
+            self._set_runtime_mamba_output_scale(1.0)
+            return
+        elapsed = max(
+            0, completed_windows - self.mamba_output_decay_start_windows
+        )
+        scale = max(
+            self.mamba_output_decay_min_scale,
+            2.0 ** (-elapsed / half_life),
+        )
+        self._set_runtime_mamba_output_scale(scale)
+
+    def configure_rollout_diagnostics(
+        self,
+        *,
+        enabled: bool,
+        periodic_reset_windows: int = 0,
+    ) -> None:
+        """Configure per-commit state tracing and a generated-window reset ablation."""
+        if periodic_reset_windows < 0:
+            raise ValueError("periodic_reset_windows must be non-negative")
+        self.record_state_diagnostics = enabled
+        self.periodic_reset_windows = periodic_reset_windows
+        self.state_diagnostics.clear()
+        self._previous_mamba_states.clear()
+
+    def begin_training_snapshot_capture(self, depths: list[int]) -> None:
+        """Capture selected generated-prefix states for multi-depth supervision."""
+        if not depths or any(depth <= 0 for depth in depths):
+            raise ValueError("training snapshot depths must be positive")
+        if len(set(depths)) != len(depths):
+            raise ValueError("training snapshot depths must be unique")
+        self.training_state_snapshots.clear()
+        self.training_history_chunks.clear()
+        self._training_snapshot_depths = set(depths)
+        self._capture_training_snapshots = True
+
+    def end_training_snapshot_capture(
+        self,
+    ) -> tuple[dict[int, tuple[Any, Any]], list[tuple[torch.Tensor, torch.Tensor]]]:
+        self._capture_training_snapshots = False
+        snapshots = self.training_state_snapshots
+        history_chunks = self.training_history_chunks
+        self.training_state_snapshots = {}
+        self.training_history_chunks = []
+        self._training_snapshot_depths.clear()
+        return snapshots, history_chunks
+
+    def restore_training_snapshot(self, snapshot: tuple[Any, Any]) -> None:
+        """Restore one accepted prefix without changing trace counters."""
+        root_state, body_state = snapshot
+        self.root_block._sequence_state = (
+            None if root_state is None else root_state.clone()
+        )
+        self.body_block._sequence_state = (
+            None if body_state is None else body_state.clone()
+        )
+
+    @staticmethod
+    def _state_tensors(state: Any) -> list[torch.Tensor]:
+        if state is None:
+            return []
+        if isinstance(state, torch.Tensor):
+            return [state]
+        tensors = []
+        for name in ("angle_dt_state", "ssm_state", "k_state", "v_state"):
+            value = getattr(state, name, None)
+            if isinstance(value, torch.Tensor):
+                tensors.append(value)
+        return tensors
+
+    @classmethod
+    def _state_norm(cls, state: Any) -> float | None:
+        tensors = cls._state_tensors(state)
+        if not tensors:
+            return None
+        total = sum(tensor.detach().float().square().sum() for tensor in tensors)
+        return float(total.sqrt())
+
+    @classmethod
+    def _state_drift_norm(cls, current: Any, previous: Any) -> float | None:
+        current_tensors = cls._state_tensors(current)
+        previous_tensors = cls._state_tensors(previous)
+        if not current_tensors or len(current_tensors) != len(previous_tensors):
+            return None
+        total = sum(
+            (now.detach().float() - before.detach().float()).square().sum()
+            for now, before in zip(current_tensors, previous_tensors)
+        )
+        return float(total.sqrt())
+
+    @staticmethod
+    def _clone_mamba_state(state: Any) -> Any:
+        if state is None:
+            return None
+        return state.clone()
+
+    def _record_state_snapshot(self, *, event: str, reset_after_commit: bool) -> None:
+        if not self.record_state_diagnostics:
+            return
+        record: dict[str, Any] = {
+            "event": event,
+            "completed_windows": self._completed_windows,
+            "accepted_commits": self._accepted_commits,
+            "periodic_reset_after_commit": reset_after_commit,
+            "blocks": {},
+        }
+        all_finite = True
+        for block_name, block in (("root", self.root_block), ("body", self.body_block)):
+            layer_records = []
+            current_states = []
+            previous_states = self._previous_mamba_states.get(block_name, [])
+            sequence_state = block._sequence_state
+            if sequence_state is not None:
+                for layer_index, layer_state in enumerate(sequence_state.layers):
+                    mamba_state = layer_state.mamba_state
+                    state_norm = self._state_norm(mamba_state)
+                    drift_norm = self._state_drift_norm(
+                        mamba_state,
+                        previous_states[layer_index]
+                        if layer_index < len(previous_states) else None,
+                    )
+                    mixer = block.sequence_stack.layers[layer_index].mixer
+                    gate = getattr(mixer, "fusion_gate_logit", None)
+                    fusion_gate = (
+                        None
+                        if gate is None
+                        else float(torch.sigmoid(gate.detach().float()))
+                        * float(getattr(mixer, "runtime_mamba_output_scale", 1.0))
+                    )
+                    cache = layer_state.attention_cache
+                    finite = all(
+                        bool(torch.isfinite(tensor).all())
+                        for tensor in self._state_tensors(mamba_state)
+                    )
+                    all_finite = all_finite and finite
+                    layer_records.append(
+                        {
+                            "layer": layer_index,
+                            "mamba_state_norm": state_norm,
+                            "mamba_state_drift_norm": drift_norm,
+                            "attention_cache_chunks": cache.num_chunks,
+                            "attention_history_tokens": cache.num_history_tokens,
+                            "fusion_gate": fusion_gate,
+                            "finite": finite,
+                        }
+                    )
+                    current_states.append(self._clone_mamba_state(mamba_state))
+            record["blocks"][block_name] = layer_records
+            self._previous_mamba_states[block_name] = current_states
+        record["all_finite"] = all_finite
+        self.state_diagnostics.append(record)
+
+    def _finish_generated_commit(self) -> None:
+        reset_after_commit = bool(
+            self.periodic_reset_windows
+            and self._completed_windows % self.periodic_reset_windows == 0
+        )
+        self._record_state_snapshot(
+            event="generated_window", reset_after_commit=reset_after_commit
+        )
+        if reset_after_commit:
+            # Preserve ARDY's outer translation/heading lifecycle and only
+            # clear adapter-owned KV/SSM memory for the reset ablation.
+            self.root_block.reset_memory()
+            self.body_block.reset_memory()
+            self._previous_mamba_states.clear()
+        if (
+            self._capture_training_snapshots
+            and self._completed_windows in self._training_snapshot_depths
+        ):
+            self.training_state_snapshots[self._completed_windows] = (
+                None
+                if self.root_block._sequence_state is None
+                else self.root_block._sequence_state.clone(),
+                None
+                if self.body_block._sequence_state is None
+                else self.body_block._sequence_state.clone(),
+            )
+
+    def prime_accepted_history(
+        self,
+        history_hybrid: torch.Tensor,
+        *,
+        text_feat: torch.Tensor,
+        text_pad_mask: torch.Tensor,
+        first_heading_angle: torch.Tensor,
+    ) -> None:
+        """Commit a ground-truth prefix before cache-only autoregressive rollout."""
+        if not self.commit_enabled:
+            raise RuntimeError("this sequence kernel has no persistent history state")
+        canonical_history_prime(
+            self.raw_denoiser,
+            history_hybrid,
+            text_feat=text_feat,
+            text_pad_mask=text_pad_mask,
+            first_heading_angle=first_heading_angle,
+            next_generation_frames=int(self.ardy_model.gen_horizon_len),
+            chunk_id=self._next_chunk_id,
+        )
+        self._next_chunk_id += 1
+        self._accepted_commits += 1
+        self._record_state_snapshot(event="initial_history", reset_after_commit=False)
 
     def install(self) -> "ArdyDiffusionMemoryController":
         if self._installed:
@@ -83,6 +338,7 @@ class ArdyDiffusionMemoryController:
             bound = self._signature.bind(*args, **kwargs)
             bound.apply_defaults()
             if self.commit_enabled:
+                self._update_runtime_mamba_output_scale()
                 # ARDY's CFG wrapper expands B to 2B/3B internally. Keep the
                 # persistent cache at the accepted user batch B so guidance
                 # branches can read it independently and the final clean B
@@ -93,101 +349,70 @@ class ArdyDiffusionMemoryController:
             result = self._original_denoising_step(*args, **kwargs)
             timestep = bound.arguments["t"]
             self._last_sampling_timestep = int(timestep.max().item())
-            if self.commit_enabled and bool((timestep == 0).all()):
-                # Defer until _recenter_history has transformed this window
-                # into the coordinate frame consumed by the next window.
-                if self._original_recenter_history is None:
-                    # Lightweight test doubles do not implement ARDY's
-                    # recenter lifecycle; preserve the original immediate
-                    # commit semantics for those callers.
-                    self._commit_accepted_result(result, bound.arguments)
-                else:
-                    self._pending_commit = (result.detach(), dict(bound.arguments))
+            self._last_text_feat = bound.arguments.get("text_feat")
+            self._last_text_pad_mask = bound.arguments.get("text_pad_mask")
+            if (
+                self.commit_enabled
+                and not self._supports_post_window_hook
+                and bool((timestep == 0).all())
+            ):
+                # Lightweight test doubles have no ARDY outer lifecycle;
+                # retain the old immediate path only for those tests.
+                self._commit_accepted_result(result, bound.arguments)
             return result
 
         self.ardy_model.denoising_step = controlled_denoising_step
-
-        def controlled_recenter_history(model_self, history_sequence, center_frame_index, requantize):
-            recentered = self._original_recenter_history(
-                history_sequence, center_frame_index, requantize
-            )
-            if self.commit_enabled and self._pending_commit is not None:
-                recentered_sequence = recentered[0]
-                accepted_x, call = self._pending_commit
-                self._commit_recentered_result(recentered_sequence, accepted_x, call)
-                self._pending_commit = None
-            return recentered
-
-        if self._original_recenter_history is not None:
-            self.ardy_model._recenter_history = types.MethodType(
-                controlled_recenter_history, self.ardy_model
-            )
+        self.ardy_model._sequence_kernel_post_window_hook = self._post_window_hook
         self._installed = True
         return self
 
     def uninstall(self) -> None:
         if self._installed:
             self.ardy_model.denoising_step = self._original_denoising_step
-            if self._original_recenter_history is not None:
-                self.ardy_model._recenter_history = self._original_recenter_history
+            self.ardy_model._sequence_kernel_post_window_hook = self._original_post_window_hook
             self._installed = False
 
-    def _commit_recentered_result(
+    def _post_window_hook(
         self,
         recentered_sequence: torch.Tensor,
-        accepted_x: torch.Tensor,
-        call: dict[str, Any],
+        center_pos: torch.Tensor,
+        new_root_motion: torch.Tensor,
+        next_heading_angle: Optional[torch.Tensor],
+        auto_step: int,
     ) -> None:
-        """Commit generated tokens after ARDY's recenter operation.
-
-        The denoising call uses a local history+generation window. The
-        recentered full history has the same newly generated tokens at its
-        tail; crop that tail back to the local window before reusing ARDY's
-        exact denoiser projections and masks for the accepted commit.
-        """
-        generation_tokens = int(call["generation_token_mask"].sum(dim=1)[0].item())
+        """Commit the recentered accepted tail as next-window history."""
+        if not self.commit_enabled:
+            return
+        nfpt = int(self.raw_denoiser.num_frames_per_token)
+        generation_frames = int(self.ardy_model.gen_horizon_len)
+        generation_tokens = generation_frames // nfpt
         if recentered_sequence.shape[1] < generation_tokens:
             raise RuntimeError("recentered history is shorter than current generation")
-        # Recentered history is in the coordinate frame for the next window;
-        # commit only the newly generated chunk. Replay it as a standalone
-        # generation-only denoiser call so all frame/token masks have the same
-        # 40-frame shape (the original call may have an 80/120-frame future).
-        local_sequence = recentered_sequence[:, -generation_tokens:]
-        batch = local_sequence.shape[0]
-        generation_frames = int(call["generation_len"].max().item())
-        device = local_sequence.device
-        history_len = torch.zeros(batch, dtype=torch.long, device=device)
-        generation_len = torch.full_like(history_len, generation_frames)
-        future_len = torch.zeros_like(history_len)
-        history_mask = torch.zeros(batch, generation_frames, dtype=torch.bool, device=device)
-        generation_mask = torch.ones_like(history_mask)
-        future_mask = torch.zeros_like(history_mask)
-        motion_mask = torch.zeros(
-            batch, generation_frames, call["motion_mask"].shape[-1],
-            dtype=call["motion_mask"].dtype, device=device,
-        )
-        observed_motion = torch.zeros_like(motion_mask)
-        history_token_mask, generation_token_mask, future_token_mask = (
-            self.raw_denoiser.hybrid.convert_frame_mask_to_token_mask(
-                history_mask, generation_mask, future_mask, motion_mask
+        if next_heading_angle is None:
+            raise RuntimeError("post-recenter hook must provide next-window heading")
+        if self._last_text_feat is None or self._last_text_pad_mask is None:
+            raise RuntimeError("missing post-recenter text conditioning")
+        history_hybrid = recentered_sequence[:, -generation_tokens:]
+        if self._capture_training_snapshots:
+            self.training_history_chunks.append(
+                (
+                    history_hybrid.detach().clone(),
+                    next_heading_angle.detach().clone(),
+                )
             )
+        canonical_history_prime(
+            self.raw_denoiser,
+            history_hybrid,
+            text_feat=self._last_text_feat,
+            text_pad_mask=self._last_text_pad_mask,
+            first_heading_angle=next_heading_angle,
+            next_generation_frames=generation_frames,
+            chunk_id=self._next_chunk_id,
         )
-        local_call = dict(call)
-        local_call.update(
-            x=local_sequence,
-            history_len=history_len,
-            generation_len=generation_len,
-            future_len=future_len,
-            history_mask=history_mask,
-            generation_mask=generation_mask,
-            future_mask=future_mask,
-            history_token_mask=history_token_mask,
-            generation_token_mask=generation_token_mask,
-            future_token_mask=future_token_mask,
-            motion_mask=motion_mask,
-            observed_motion=observed_motion,
-        )
-        self._commit_accepted_result(local_sequence, local_call)
+        self._next_chunk_id += 1
+        self._completed_windows += 1
+        self._accepted_commits += 1
+        self._finish_generated_commit()
 
     def _commit_accepted_result(self, accepted_x: torch.Tensor, call: dict) -> None:
         generation_mask = call["generation_token_mask"]
@@ -254,6 +479,7 @@ class ArdyDiffusionMemoryController:
         self._next_chunk_id += 1
         self._completed_windows += 1
         self._accepted_commits += 1
+        self._finish_generated_commit()
 
 
 class ArdySequenceKernelClient:

@@ -1,11 +1,13 @@
 # Snapshot Manifest
 
-- Snapshot date: 2026-08-20
-- Target branch: `full-training-20260820`
+- Snapshot date: 2026-08-29
+- Target branch: `full-training-20260829`
 - Included top-level directories: `MotionMamba2.0/`, `runtime/`
 - Source-code branch at snapshot time: `BaselineAndC1`
 - Source working-tree changes: included
 - Source `.git` metadata: excluded
+- Regression verification: `102 passed, 6 skipped`
+- Shell launcher syntax verification: passed
 
 ## Excluded Generated Content
 
@@ -18,4 +20,3 @@
   uploaded source directories
 
 No file in this snapshot exceeds GitHub's 100 MB per-file limit.
-
