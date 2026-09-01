@@ -32,6 +32,7 @@ class ArdySequenceKernelConfig:
     use_state_delta: bool = True
     state_conditioning_scale_init: float = 0.0
     fusion_gate_logit_init: float = 0.0
+    ff_size: int | None = None
 
     def __post_init__(self) -> None:
         if self.mode not in {"original", "dit", "minimal", "hybrid"}:
@@ -40,6 +41,8 @@ class ArdySequenceKernelConfig:
             raise ValueError("window_size_chunks must be non-negative")
         if self.num_sink_tokens <= 0 and self.mode in {"minimal", "hybrid"}:
             raise ValueError("minimal/hybrid modes require attention sink tokens")
+        if self.ff_size is not None and self.ff_size <= 0:
+            raise ValueError("ff_size must be positive")
         if self.mode != "hybrid" and self.token_state_interaction != "naive_gated_add":
             raise ValueError("token/state interaction is available only in hybrid mode")
 
@@ -125,14 +128,19 @@ def install_ardy_sequence_kernel(
         "state_conditioning_scale_init": config.state_conditioning_scale_init,
         "fusion_gate_logit_init": config.fusion_gate_logit_init,
     }
+    root_kwargs = _block_kwargs(raw, old_root)
+    body_kwargs = _block_kwargs(raw, old_body)
+    if config.ff_size is not None:
+        root_kwargs["ff_size"] = config.ff_size
+        body_kwargs["ff_size"] = config.ff_size
     root = ArdyDiTSequenceBlock(
         output_dim=old_root.output_linear.out_features,
-        **_block_kwargs(raw, old_root),
+        **root_kwargs,
         **common,
     )
     body = ArdyDiTSequenceBlock(
         output_dim=old_body.output_linear.out_features,
-        **_block_kwargs(raw, old_body),
+        **body_kwargs,
         **common,
     )
     _copy_compatible_frontend(old_root, root)

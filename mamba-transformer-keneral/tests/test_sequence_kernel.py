@@ -205,6 +205,25 @@ def test_hybrid_forward_backward_shape_finite_and_explicit_fusion():
     assert kernel.attention.q_proj.weight.grad is not None
 
 
+def test_hybrid_runtime_mamba_output_scale_only_changes_readout():
+    kernel = _make_hybrid().eval()
+    state = kernel.init_state(batch_size=2)
+    x = torch.randn(2, 6, 32)
+    attention, _, _ = kernel.forward_chunk(
+        x, state=state, enable_attention_path=True, enable_mamba_path=False
+    )
+    mamba, _, _ = kernel.forward_chunk(
+        x, state=state, enable_attention_path=False, enable_mamba_path=True
+    )
+    kernel.runtime_mamba_output_scale = 0.25
+    output, _, aux = kernel.forward_chunk(x, state=state)
+    expected = attention + 0.25 * torch.sigmoid(kernel.fusion_gate_logit) * mamba
+    assert torch.allclose(output, expected)
+    assert aux["fusion_gate"] == pytest.approx(
+        0.25 * float(torch.sigmoid(kernel.fusion_gate_logit))
+    )
+
+
 @pytest.mark.parametrize("interaction", ["h0_parallel", "h1_innovation"])
 def test_stage07_output_interaction_zero_init_exact_and_receives_gradients(interaction):
     kernel = _make_output_interaction(interaction, seed=11).train()

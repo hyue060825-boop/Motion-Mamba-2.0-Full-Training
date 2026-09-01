@@ -65,9 +65,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num-samples", type=int, default=1)
     parser.add_argument("--diffusion-steps", type=int, default=None)
     parser.add_argument("--history-frames", type=int, default=None)
+    parser.add_argument(
+        "--constraints",
+        default=None,
+        help="Saved ARDY constraint list passed through as motion conditioning.",
+    )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--cfg-weight", type=float, nargs="+", default=[2.0, 2.0])
     parser.add_argument("--checkpoints-dir", default=None)
+    parser.add_argument(
+        "--stats-dir",
+        default=None,
+        help="Train-only ARDY dual-root stats used by the sequence checkpoint.",
+    )
     parser.add_argument("--ardy-root", default=str(DEFAULT_ARDY_ROOT))
     parser.add_argument("--text-encoder-base-mirror", default=None)
     parser.add_argument("--text-encoder-mntp-adapter", default=None)
@@ -120,6 +130,7 @@ def main() -> int:
     _prepend_python_paths(*python_paths)
 
     from ardy.model import DEFAULT_MODEL, load_model
+    from ardy.constraints import load_constraints_lst
     from ardy.model.loading import get_env_var
     from ardy.model.registry import resolve_model_name
     from ardy.motion_rep.tools import length_to_mask
@@ -176,6 +187,23 @@ def main() -> int:
         checkpoints_dir=checkpoints_dir,
         text_encoder=text_encoder,
     )
+    if args.stats_dir:
+        from ardy.motion_rep.reps.ardy_motionrep import ArdyMotionRep
+
+        old_rep = model.motion_rep
+        motion_rep = ArdyMotionRep(
+            old_rep.skeleton,
+            old_rep.fps,
+            stats_path=str(Path(args.stats_dir).resolve()),
+        )
+        motion_rep.skeleton = old_rep.skeleton
+        model.motion_rep = motion_rep
+        raw_denoiser = model.denoiser.model
+        raw_denoiser.motion_rep = motion_rep
+        model.autoencoder._motion_rep = motion_rep
+        for converter in (model.hybrid, raw_denoiser.hybrid):
+            converter._motion_rep = motion_rep
+            converter.__dict__.pop("motion_rep", None)
     client = install_ardy_sequence_kernel(
         model,
         ArdySequenceKernelConfig(
@@ -213,6 +241,15 @@ def main() -> int:
         max_window = (int(10 * fps) // patch) * patch
         history_frames = ((max_window - model.gen_horizon_len) // patch) * patch
 
+    constraint_lst = []
+    if args.constraints:
+        constraint_lst = load_constraints_lst(args.constraints, model.skeleton)
+        max_frame_idx = max(int(c.frame_indices.max()) for c in constraint_lst)
+        if max_frame_idx >= num_frames:
+            raise ValueError(
+                f"constraint frame index {max_frame_idx} exceeds requested motion length {num_frames}"
+            )
+
     texts = [args.prompt.strip()] * args.num_samples
     text_feat = None
     text_feat_pad_mask = None
@@ -236,6 +273,17 @@ def main() -> int:
     lengths = torch.tensor([num_frames] * args.num_samples, device=device)
     pad_mask = length_to_mask(lengths)
     heading = torch.zeros(args.num_samples, device=device)
+    observed_motion = None
+    motion_mask = None
+    if constraint_lst:
+        observed_motion, motion_mask = (
+            model.motion_rep.create_conditions_from_constraints_batched(
+                constraint_lst,
+                lengths,
+                to_normalize=True,
+                device=device,
+            )
+        )
     print(
         f"Generating mode={mode}, backend={args.attention_backend}, "
         f"frames={num_frames}, steps={diffusion_steps}"
@@ -249,8 +297,8 @@ def main() -> int:
             num_denoising_steps=diffusion_steps,
             pad_mask=pad_mask,
             first_heading_angle=heading,
-            motion_mask=None,
-            observed_motion=None,
+            motion_mask=motion_mask,
+            observed_motion=observed_motion,
             cfg_weight=cfg_weight,
             crop_history_length=history_frames,
             text_feat=text_feat,
@@ -304,7 +352,7 @@ def main() -> int:
                 output["root_positions"],
                 output["foot_contacts"],
                 model.skeleton,
-                constraint_lst=None,
+                constraint_lst=constraint_lst or None,
             )
         )
     if isinstance(model.skeleton, SOMASkeleton30):

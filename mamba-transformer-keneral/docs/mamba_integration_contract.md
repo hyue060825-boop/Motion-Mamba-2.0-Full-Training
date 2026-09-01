@@ -1,5 +1,11 @@
 # Mamba Integration Contract
 
+> 2026-08-31 historical-status addendum: references below to an unimplemented
+> cross-window interface are historical. Accepted-window lifecycle, bounded
+> Attention/Mamba state, differentiable rollout, and causal state interventions
+> now exist. This does not imply a positive result: the preregistered 100/250
+> gate failed. See `MAMBA_LONG_SEQUENCE_EVIDENCE_AUDIT_20260831.md`.
+
 Last updated: 2026-07-20.
 
 Audience: collaborators connecting the Mamba-side operator to downstream

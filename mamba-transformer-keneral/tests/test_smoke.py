@@ -107,14 +107,20 @@ def test_reset_mask_is_per_row_and_isolates_rows():
         assert torch.count_nonzero(reset_state.ssm_state[2]) == 0
         assert torch.equal(reset_state.ssm_state[1], state.ssm_state[1])
 
-        # Running the next chunk with a reset row must match running that
-        # SAME row fresh (state=None), proving reset actually took effect
-        # through a real forward pass, not just on the state tensor at rest.
+        # Running the next chunk with a reset row must match a fresh state in
+        # the same batch shape. The bf16 Triton Mamba path is not required to
+        # be bitwise invariant when B changes from 3 to 1, so a singleton
+        # reference would conflate reset semantics with batch-shape numerics.
         x2 = torch.randn(batch, chunk_len, model.d_model, device="cuda", dtype=torch.bfloat16)
         out_with_reset, _ = wrapper.forward_chunk(x2, reset_state)
-        out_fresh, _ = wrapper.forward_chunk(x2[0:1], None)
-        max_diff = (out_with_reset[0].float() - out_fresh[0].float()).abs().max().item()
-        assert max_diff < 1e-3, f"reset row diverged from a fresh-state run: {max_diff}"
+        out_fresh, _ = wrapper.forward_chunk(x2, None)
+        for row in (0, 2):
+            max_diff = (
+                out_with_reset[row].float() - out_fresh[row].float()
+            ).abs().max().item()
+            assert max_diff < 1e-3, (
+                f"reset row {row} diverged from a fresh-state run: {max_diff}"
+            )
 
 
 @requires_cuda

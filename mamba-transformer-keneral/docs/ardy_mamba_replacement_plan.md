@@ -1,5 +1,12 @@
 # ARDY to Mamba Replacement Plan
 
+> 2026-08-31 historical-status addendum: unchecked cross-window items below no
+> longer describe the current implementation. Persistent KV/Mamba carry,
+> differentiable multiwindow rollout, and state interventions are implemented
+> and tested. The evidence gate is nevertheless `NOT SUPPORTED`; see
+> `MAMBA_LONG_SEQUENCE_EVIDENCE_AUDIT_20260831.md`. The original checklist is
+> preserved as historical planning context.
+
 Last updated: 2026-07-20.
 
 Post-Stage-05 scope note (2026-08-14): this document began as an engineering

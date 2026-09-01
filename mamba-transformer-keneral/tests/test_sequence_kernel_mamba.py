@@ -126,7 +126,9 @@ def test_real_mamba_c1_state_query_differentiable_carry_and_no_current_leakage()
     assert state.state_summary.shape == (1, 16)
     assert torch.count_nonzero(state.state_delta) == 0
 
-    history = torch.randn(1, 16, 64, device="cuda", dtype=torch.bfloat16)
+    history = torch.randn(
+        1, 16, 64, device="cuda", dtype=torch.bfloat16, requires_grad=True
+    )
     _, history_pending, _ = kernel.forward_chunk(history, state=state)
     kernel.commit(state, history_pending, chunk_id=0, detach=False)
     assert state.attention_cache.chunk_ids == (0,)
@@ -148,6 +150,8 @@ def test_real_mamba_c1_state_query_differentiable_carry_and_no_current_leakage()
     assert kernel.token_state_interaction.state_to_address.weight.grad is not None
     assert kernel.token_state_interaction.scale.grad is not None
     assert kernel.attention.q_proj.weight.grad is not None
+    assert history.grad is not None and torch.isfinite(history.grad.float()).all()
+    assert torch.count_nonzero(history.grad) > 0
     assert current.grad is not None and torch.isfinite(current.grad.float()).all()
 
 
