@@ -186,6 +186,7 @@ class MinimalAttentionKernel(nn.Module):
         detach_on_commit: bool = True,
         query_bias: Optional[torch.Tensor] = None,
         history_chunk_scales: Optional[torch.Tensor] = None,
+        extra_content: Optional[torch.Tensor] = None,
     ) -> tuple[torch.Tensor, PendingChunkKV, dict]:
         """Read sinks/history, attend with current K/V, and optionally commit.
 
@@ -284,10 +285,23 @@ class MinimalAttentionKernel(nn.Module):
             history_value = torch.empty_like(history_key)
             history_valid = torch.empty(batch_size, 0, dtype=torch.bool, device=x.device)
 
-        key = torch.cat((sink_key, history_key, current_key), dim=2)
-        value = torch.cat((sink_value, history_value, current_value), dim=2)
-        key_valid = torch.cat((sink_valid, history_valid, current_mask), dim=1)
-        prefix_tokens = sink_key.shape[2] + history_key.shape[2]
+        if extra_content is not None:
+            if extra_content.ndim != 3 or extra_content.shape[0] != batch_size or extra_content.shape[2] != self.config.d_model:
+                raise ValueError("extra_content must have shape [B,K,d_model]")
+            if extra_content.device != x.device or extra_content.dtype != x.dtype:
+                raise ValueError("extra_content device/dtype must match x")
+            memory_key = self._split_heads(self.k_proj(extra_content))
+            memory_value = self._split_heads(self.v_proj(extra_content))
+            memory_valid = torch.ones(batch_size, extra_content.shape[1], dtype=torch.bool, device=x.device)
+        else:
+            memory_key = torch.empty(batch_size, self.config.num_heads, 0, self.head_dim, dtype=x.dtype, device=x.device)
+            memory_value = torch.empty_like(memory_key)
+            memory_valid = torch.empty(batch_size, 0, dtype=torch.bool, device=x.device)
+
+        key = torch.cat((sink_key, memory_key, history_key, current_key), dim=2)
+        value = torch.cat((sink_value, memory_value, history_value, current_value), dim=2)
+        key_valid = torch.cat((sink_valid, memory_valid, history_valid, current_mask), dim=1)
+        prefix_tokens = sink_key.shape[2] + memory_key.shape[2] + history_key.shape[2]
         allowed_mask = self._build_allowed_mask(
             key_valid=key_valid,
             query_valid=current_mask,
@@ -321,6 +335,7 @@ class MinimalAttentionKernel(nn.Module):
             "query_tokens": chunk_len,
             "kv_tokens": key.shape[2],
             "history_tokens_read": history_key.shape[2],
+            "persistent_content_tokens_read": memory_key.shape[2],
             "sink_tokens": sink_key.shape[2],
             "cache_committed": commit,
             "cached_chunks": cache.num_chunks if cache is not None else 0,

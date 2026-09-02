@@ -78,6 +78,10 @@ class ArdyDiTSequenceBlock(nn.Module):
         use_state_delta: bool = True,
         state_conditioning_scale_init: float = 0.0,
         fusion_gate_logit_init: float = 0.0,
+        content_memory_enabled: bool = False,
+        content_memory_slots: int = 1,
+        content_memory_read_enabled: bool = True,
+        content_memory_use_state_delta: bool = True,
         mamba_factory: Optional[MambaFactory] = None,
         device=None,
         **_ignored,
@@ -151,6 +155,10 @@ class ArdyDiTSequenceBlock(nn.Module):
                 use_state_delta=use_state_delta,
                 state_conditioning_scale_init=state_conditioning_scale_init,
                 fusion_gate_logit_init=fusion_gate_logit_init,
+                content_memory_enabled=content_memory_enabled,
+                content_memory_slots=content_memory_slots,
+                content_memory_read_enabled=content_memory_read_enabled,
+                content_memory_use_state_delta=content_memory_use_state_delta,
             )
             if kernel_mode == "minimal":
                 return SequenceKernel(config)
@@ -226,6 +234,9 @@ class ArdyDiTSequenceBlock(nn.Module):
 
         self._sequence_state: Optional[DiTSequenceState] = None
         self._accepted_commit: Optional[tuple[torch.Tensor, int, bool]] = None
+        self.content_memory_read_enabled_runtime: bool | None = None
+        self.content_memory_write_enabled_runtime = True
+        self.content_memory_delta_mode_runtime = "normal"
         self.read_only_forwards = 0
         self.accepted_commits = 0
 
@@ -395,6 +406,9 @@ class ArdyDiTSequenceBlock(nn.Module):
                 state=state,
                 commit=False,
                 current_mask=stack_mask,
+                content_memory_read_enabled=self.content_memory_read_enabled_runtime,
+                content_memory_write_enabled=self.content_memory_write_enabled_runtime,
+                content_memory_delta_mode=self.content_memory_delta_mode_runtime,
             )
             hidden_parts.append(part_hidden)
         hidden = torch.cat(hidden_parts, dim=0)
@@ -419,6 +433,9 @@ class ArdyDiTSequenceBlock(nn.Module):
                 chunk_id=chunk_id,
                 current_mask=None,
                 detach_on_commit=detach,
+                content_memory_read_enabled=self.content_memory_read_enabled_runtime,
+                content_memory_write_enabled=self.content_memory_write_enabled_runtime,
+                content_memory_delta_mode=self.content_memory_delta_mode_runtime,
             )
             self.accepted_commits += 1
             self._accepted_commit = None

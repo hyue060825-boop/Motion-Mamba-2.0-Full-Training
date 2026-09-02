@@ -37,6 +37,8 @@ class SequenceKernelState:
     source_kernel_id: int
     state_summary: Optional[torch.Tensor] = None
     state_delta: Optional[torch.Tensor] = None
+    persistent_memory: Optional[torch.Tensor] = None
+    commit_version: int = 0
 
     def detach(self) -> "SequenceKernelState":
         self.attention_cache.detach()
@@ -45,6 +47,8 @@ class SequenceKernelState:
             self.state_summary = self.state_summary.detach()
         if self.state_delta is not None:
             self.state_delta = self.state_delta.detach()
+        if self.persistent_memory is not None:
+            self.persistent_memory = self.persistent_memory.detach()
         return self
 
     def clone(self) -> "SequenceKernelState":
@@ -56,6 +60,8 @@ class SequenceKernelState:
                 None if self.state_summary is None else self.state_summary.clone()
             ),
             state_delta=None if self.state_delta is None else self.state_delta.clone(),
+            persistent_memory=None if self.persistent_memory is None else self.persistent_memory.clone(),
+            commit_version=self.commit_version,
         )
 
 
@@ -68,6 +74,8 @@ class PendingSequenceKernelState:
     source_kernel_id: int
     state_summary: Optional[torch.Tensor] = None
     state_delta: Optional[torch.Tensor] = None
+    persistent_memory: Optional[torch.Tensor] = None
+    base_commit_version: int = 0
 
     def detach(self) -> "PendingSequenceKernelState":
         return PendingSequenceKernelState(
@@ -78,4 +86,6 @@ class PendingSequenceKernelState:
                 None if self.state_summary is None else self.state_summary.detach()
             ),
             state_delta=None if self.state_delta is None else self.state_delta.detach(),
+            persistent_memory=None if self.persistent_memory is None else self.persistent_memory.detach(),
+            base_commit_version=self.base_commit_version,
         )

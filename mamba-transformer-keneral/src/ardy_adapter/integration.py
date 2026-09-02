@@ -32,6 +32,10 @@ class ArdySequenceKernelConfig:
     use_state_delta: bool = True
     state_conditioning_scale_init: float = 0.0
     fusion_gate_logit_init: float = 0.0
+    content_memory_enabled: bool = False
+    content_memory_slots: int = 1
+    content_memory_read_enabled: bool = True
+    content_memory_use_state_delta: bool = True
     ff_size: int | None = None
 
     def __post_init__(self) -> None:
@@ -45,6 +49,10 @@ class ArdySequenceKernelConfig:
             raise ValueError("ff_size must be positive")
         if self.mode != "hybrid" and self.token_state_interaction != "naive_gated_add":
             raise ValueError("token/state interaction is available only in hybrid mode")
+        if self.content_memory_enabled and self.mode != "hybrid":
+            raise ValueError("content memory requires hybrid mode")
+        if self.content_memory_slots <= 0:
+            raise ValueError("content_memory_slots must be positive")
 
 
 def _copy_compatible_frontend(source: nn.Module, target: nn.Module) -> None:
@@ -127,6 +135,10 @@ def install_ardy_sequence_kernel(
         "use_state_delta": config.use_state_delta,
         "state_conditioning_scale_init": config.state_conditioning_scale_init,
         "fusion_gate_logit_init": config.fusion_gate_logit_init,
+        "content_memory_enabled": config.content_memory_enabled,
+        "content_memory_slots": config.content_memory_slots,
+        "content_memory_read_enabled": config.content_memory_read_enabled,
+        "content_memory_use_state_delta": config.content_memory_use_state_delta,
     }
     root_kwargs = _block_kwargs(raw, old_root)
     body_kwargs = _block_kwargs(raw, old_body)

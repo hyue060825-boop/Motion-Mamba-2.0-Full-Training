@@ -64,6 +64,9 @@ class DiTSequenceLayer(nn.Module):
         chunk_id: int | None = None,
         current_mask: torch.Tensor | None = None,
         detach_on_commit: bool = True,
+        content_memory_read_enabled: bool | None = None,
+        content_memory_write_enabled: bool = True,
+        content_memory_delta_mode: str = "normal",
     ):
         if condition.shape != (x.shape[0], self.d_model):
             raise ValueError(
@@ -90,6 +93,9 @@ class DiTSequenceLayer(nn.Module):
             chunk_id=chunk_id,
             current_mask=current_mask,
             detach_on_commit=detach_on_commit,
+            content_memory_read_enabled=content_memory_read_enabled,
+            content_memory_write_enabled=content_memory_write_enabled,
+            content_memory_delta_mode=content_memory_delta_mode,
         )
         x = x + gate_mixer[:, None] * mixed
         mlp_input = _modulate(self.norm_mlp(x), shift_mlp, scale_mlp)

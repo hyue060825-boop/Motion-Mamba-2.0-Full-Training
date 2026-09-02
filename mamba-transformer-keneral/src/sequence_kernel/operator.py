@@ -59,6 +59,9 @@ class SequenceKernel(nn.Module):
         super().__init__()
         self.config = config
         self.attention = MinimalAttentionKernel(config.attention)
+        # Keep the minimal import/registration contract intact.  Hybrid-only
+        # content memory is attached below, after the mode checks.
+        self.content_memory = None
 
         if config.mode == "minimal":
             if (
@@ -160,6 +163,17 @@ class SequenceKernel(nn.Module):
             self.output_interaction = None
             self.delta_rule = None
 
+        if config.content_memory_enabled:
+            if not self.uses_token_state_interaction:
+                raise ValueError("content memory requires state_query or state_kv_modulation")
+            from state_memory_operator.content_memory import PersistentContentMemory
+
+            self.content_memory = PersistentContentMemory(
+                state_dim=config.state_summary_dim,
+                d_model=config.d_model,
+                slots=config.content_memory_slots,
+            )
+
     @property
     def uses_token_state_interaction(self) -> bool:
         return self.mode == "hybrid" and self.config.interaction in {
@@ -218,17 +232,24 @@ class SequenceKernel(nn.Module):
                 )
         state_summary = None
         state_delta = None
+        persistent_memory = None
         if self.uses_token_state_interaction:
             if mamba_state is None:
                 raise RuntimeError("C1 interaction requires an initialized Mamba state")
             state_summary = self._project_state(mamba_state)
             state_delta = torch.zeros_like(state_summary)
+        if self.content_memory is not None:
+            parameter = self._mamba_parameter()
+            persistent_memory = self.content_memory.initial(
+                batch_size, device=parameter.device, dtype=parameter.dtype
+            )
         return SequenceKernelState(
             attention_cache=attention_cache,
             mamba_state=mamba_state,
             source_kernel_id=id(self),
             state_summary=state_summary,
             state_delta=state_delta,
+            persistent_memory=persistent_memory,
         )
 
     def _validate_state(self, state: SequenceKernelState, batch_size: int) -> None:
@@ -244,6 +265,8 @@ class SequenceKernel(nn.Module):
             state.state_summary is None or state.state_delta is None
         ):
             raise ValueError("C1 state requires committed state_summary and state_delta")
+        if self.content_memory is not None and state.persistent_memory is None:
+            raise ValueError("content-memory state requires persistent_memory slots")
 
     def forward_chunk(
         self,
@@ -257,6 +280,10 @@ class SequenceKernel(nn.Module):
         detach_on_commit: bool = True,
         enable_attention_path: bool = True,
         enable_mamba_path: Optional[bool] = None,
+        content_memory_read_enabled: Optional[bool] = None,
+        content_memory_write_enabled: bool = True,
+        content_memory_delta: Optional[torch.Tensor] = None,
+        content_memory_delta_mode: str = "normal",
     ) -> tuple[torch.Tensor, PendingSequenceKernelState, dict]:
         """Evaluate selected paths and return their uncommitted next memory."""
         if x.ndim != 3:
@@ -269,6 +296,14 @@ class SequenceKernel(nn.Module):
             raise ValueError("Mamba path is unavailable in minimal mode")
         if not enable_attention_path and not enable_mamba_path:
             raise ValueError("at least one sequence path must be enabled")
+        if not isinstance(content_memory_write_enabled, bool):
+            raise TypeError("content_memory_write_enabled must be bool")
+        if content_memory_delta_mode not in {"normal", "zero", "permute"}:
+            raise ValueError("content_memory_delta_mode must be normal, zero, or permute")
+        if content_memory_read_enabled is not None and not isinstance(
+            content_memory_read_enabled, bool
+        ):
+            raise TypeError("content_memory_read_enabled must be bool or None")
         if current_mask is not None:
             expected_mask_shape = (x.shape[0], x.shape[1])
             if current_mask.shape != expected_mask_shape or current_mask.dtype != torch.bool:
@@ -288,6 +323,21 @@ class SequenceKernel(nn.Module):
         query_bias = None
         history_chunk_scales = None
         interaction_aux = None
+        memory_content = None
+        memory_read_enabled = (
+            self.config.content_memory_read_enabled
+            if content_memory_read_enabled is None
+            else content_memory_read_enabled
+        )
+        if self.content_memory is not None and do_read and memory_read_enabled:
+            candidate_memory_content = self.content_memory.read(
+                state.persistent_memory, enabled=True
+            ).to(x.dtype)
+            # A zero-initialized slot must not alter attention normalization by
+            # merely existing as an all-zero K/V token. Once a write creates
+            # content, the same fixed number of slots is exposed to attention.
+            if bool(torch.count_nonzero(candidate_memory_content)):
+                memory_content = candidate_memory_content
         if enable_attention_path and self.uses_token_state_interaction:
             summary = state.state_summary
             delta = state.state_delta
@@ -322,6 +372,7 @@ class SequenceKernel(nn.Module):
                 current_mask=current_mask,
                 query_bias=query_bias,
                 history_chunk_scales=history_chunk_scales,
+                extra_content=memory_content,
             )
 
         mamba_output = None
@@ -346,6 +397,31 @@ class SequenceKernel(nn.Module):
         if self.uses_token_state_interaction and next_mamba_state is not None:
             next_state_summary = self._project_state(next_mamba_state)
             next_state_delta = next_state_summary - state.state_summary
+
+        next_memory = None
+        if self.content_memory is not None:
+            next_memory = state.persistent_memory
+            if (
+                next_state_summary is not None
+                and next_state_delta is not None
+                and content_memory_write_enabled
+            ):
+                write_delta = next_state_delta
+                if content_memory_delta is not None:
+                    if content_memory_delta.shape != next_state_delta.shape or content_memory_delta.device != next_state_delta.device:
+                        raise ValueError("content_memory_delta must match next state_delta")
+                    write_delta = content_memory_delta.to(next_state_delta.dtype)
+                elif content_memory_delta_mode == "zero":
+                    write_delta = torch.zeros_like(next_state_delta)
+                elif content_memory_delta_mode == "permute":
+                    if next_state_delta.shape[0] <= 1:
+                        raise ValueError("permute content delta requires batch size > 1")
+                    write_delta = torch.roll(next_state_delta, shifts=1, dims=0)
+                if not self.config.content_memory_use_state_delta:
+                    write_delta = torch.zeros_like(write_delta)
+                next_memory = self.content_memory.propose(
+                    next_state_summary, write_delta, state.persistent_memory
+                ).slots
 
         if attention_output is not None and mamba_output is not None:
             if self.uses_output_interaction:
@@ -379,6 +455,8 @@ class SequenceKernel(nn.Module):
             source_kernel_id=id(self),
             state_summary=next_state_summary,
             state_delta=next_state_delta,
+            persistent_memory=next_memory,
+            base_commit_version=state.commit_version,
         )
         if commit:
             self.commit(
@@ -440,6 +518,14 @@ class SequenceKernel(nn.Module):
             "interaction": interaction_aux,
             "attention": attention_aux,
             "state_committed": commit,
+            "persistent_content_memory": {
+                "enabled": self.content_memory is not None,
+                "read_enabled": bool(memory_content is not None),
+                "write_enabled": content_memory_write_enabled,
+                "uses_state_delta": self.config.content_memory_use_state_delta,
+                "slots": 0 if self.content_memory is None else self.config.content_memory_slots,
+                "read_norm": None if memory_content is None else memory_content.float().norm(dim=-1).mean().item(),
+            },
         }
         return output, pending, aux
 
@@ -455,6 +541,11 @@ class SequenceKernel(nn.Module):
         self._validate_state(state, state.attention_cache.batch_size)
         if pending.source_kernel_id != id(self):
             raise ValueError("pending state was produced by a different sequence kernel")
+        if pending.base_commit_version != state.commit_version:
+            raise RuntimeError(
+                "pending state is stale or was already committed; each accepted window "
+                "must be committed exactly once"
+            )
         if pending.attention_kv is not None:
             if chunk_id is None:
                 raise ValueError("committing attention K/V requires chunk_id")
@@ -476,6 +567,11 @@ class SequenceKernel(nn.Module):
             state.state_delta = (
                 pending.state_delta.detach() if detach else pending.state_delta
             )
+        if pending.persistent_memory is not None:
+            state.persistent_memory = (
+                pending.persistent_memory.detach() if detach else pending.persistent_memory
+            )
+        state.commit_version += 1
         return state
 
     def reset_state(
@@ -505,4 +601,7 @@ class SequenceKernel(nn.Module):
                     torch.zeros_like(projected),
                     state.state_delta,
                 )
+        if self.content_memory is not None and state.persistent_memory is not None:
+            state.persistent_memory = self.content_memory.reset(state.persistent_memory, reset_mask)
+        state.commit_version += 1
         return state

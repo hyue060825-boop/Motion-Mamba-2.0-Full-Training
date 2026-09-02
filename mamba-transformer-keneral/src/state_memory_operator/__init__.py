@@ -17,6 +17,7 @@ from importlib import import_module
 
 from .config import StateMemoryOperatorConfig
 from .event_memory import EventMemory
+from .content_memory import ContentMemoryPending, PersistentContentMemory
 from .state_qkv import ContentQueryEncoder, ContentValueEncoder, StateQKVEncoder
 
 
@@ -52,6 +53,8 @@ __all__ = [
     "StateTransitionMemoryOperator",
     "OperatorState",
     "EventMemory",
+    "PersistentContentMemory",
+    "ContentMemoryPending",
     "Mamba3ChunkWrapper",
     "Mamba3State",
     "apply_reset_mask",

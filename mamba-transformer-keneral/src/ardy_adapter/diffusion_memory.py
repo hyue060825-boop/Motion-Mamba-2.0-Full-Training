@@ -73,6 +73,26 @@ class ArdyDiffusionMemoryController:
         self._last_intervention_checksum: Optional[str] = None
         self._intervention_applied_window: Optional[int] = None
         self.intervention_audit: list[dict[str, Any]] = []
+        self.content_memory_intervention = "normal"
+
+    def configure_content_memory_intervention(self, strategy: str = "normal") -> None:
+        allowed = {"normal", "zero_delta", "permute_delta", "write_off", "readout_off", "permute_memory"}
+        if strategy not in allowed:
+            raise ValueError(f"unknown content-memory intervention {strategy!r}")
+        self.content_memory_intervention = strategy
+        self._set_content_memory_runtime()
+
+    def _set_content_memory_runtime(self, *, cue_window: bool = False) -> None:
+        strategy = getattr(self, "content_memory_intervention", "normal")
+        read_enabled = not (strategy == "readout_off" and self._completed_windows >= 4)
+        write_enabled = not (strategy == "write_off" and cue_window)
+        mode = "normal"
+        if cue_window and strategy in {"zero_delta", "permute_delta"}:
+            mode = "zero" if strategy == "zero_delta" else "permute"
+        for block in (self.root_block, self.body_block):
+            block.content_memory_read_enabled_runtime = read_enabled
+            block.content_memory_write_enabled_runtime = write_enabled
+            block.content_memory_delta_mode_runtime = mode
 
     @property
     def trace(self) -> DiffusionMemoryTrace:
@@ -104,6 +124,7 @@ class ArdyDiffusionMemoryController:
             self._intervention_applied_window = None
             self.intervention_audit.clear()
             self._set_runtime_mamba_output_scale(1.0)
+            self._set_content_memory_runtime()
 
     @staticmethod
     def _transform_state(state: Any, transform) -> Any:
@@ -226,10 +247,16 @@ class ArdyDiffusionMemoryController:
     def _apply_mamba_state_intervention(self) -> None:
         strategy = self.state_intervention
         if strategy in {"carry", "no_decay"}:
+            self._set_content_memory_runtime()
+            if (self.content_memory_intervention == "permute_memory" and self._completed_windows >= 4
+                    and self._intervention_applied_window != self._completed_windows):
+                self._permute_content_memory()
+                self._intervention_applied_window = self._completed_windows
             return
         if self._intervention_applied_window == self._completed_windows:
             return
         after_w4 = self._completed_windows >= 4
+        self._set_content_memory_runtime()
         if strategy in {"zero_after_w4", "freeze_after_w4", "permute_after_w4", "readout_off_after_w4"} and not after_w4:
             return
         attention_before = self._attention_checksum()
@@ -299,6 +326,19 @@ class ArdyDiffusionMemoryController:
             "mamba_checksum_before": ":".join(mamba_before),
             "mamba_checksum_after": self._last_intervention_checksum,
         })
+
+    def _permute_content_memory(self) -> None:
+        for block in (self.root_block, self.body_block):
+            sequence_state = block._sequence_state
+            if sequence_state is None or not sequence_state.layers:
+                continue
+            batch = sequence_state.layers[0].attention_cache.batch_size
+            if batch <= 1:
+                raise ValueError("permute_memory requires batch size > 1")
+            permutation = torch.roll(torch.arange(batch, device=sequence_state.layers[0].attention_cache.device), 1)
+            for layer in sequence_state.layers:
+                if layer.persistent_memory is not None:
+                    layer.persistent_memory = layer.persistent_memory.index_select(0, permutation.to(layer.persistent_memory.device))
 
     def configure_mamba_output_decay(
         self,
@@ -629,16 +669,22 @@ class ArdyDiffusionMemoryController:
                     history_hybrid.detach().clone(),
                     next_heading_angle.detach().clone(),
                 )
+                )
+        # D interventions apply only to the first accepted cue-window write;
+        # all noisy forwards remain read-only and later commits are normal.
+        self._set_content_memory_runtime(cue_window=(self._completed_windows == 0))
+        try:
+            canonical_history_prime(
+                self.raw_denoiser,
+                history_hybrid,
+                text_feat=self._last_text_feat,
+                text_pad_mask=self._last_text_pad_mask,
+                first_heading_angle=next_heading_angle,
+                next_generation_frames=generation_frames,
+                chunk_id=self._next_chunk_id,
             )
-        canonical_history_prime(
-            self.raw_denoiser,
-            history_hybrid,
-            text_feat=self._last_text_feat,
-            text_pad_mask=self._last_text_pad_mask,
-            first_heading_angle=next_heading_angle,
-            next_generation_frames=generation_frames,
-            chunk_id=self._next_chunk_id,
-        )
+        finally:
+            self._set_content_memory_runtime()
         self._next_chunk_id += 1
         self._completed_windows += 1
         self._accepted_commits += 1

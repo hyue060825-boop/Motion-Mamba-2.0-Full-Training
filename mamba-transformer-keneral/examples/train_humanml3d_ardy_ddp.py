@@ -200,6 +200,15 @@ def parse_args():
     parser.add_argument("--long-slope-margin-cm-per-window", type=float, default=0.0)
     parser.add_argument("--rollout-gradient-checkpointing", action="store_true")
     parser.add_argument("--attention-window-chunks", type=int, default=4)
+    parser.add_argument("--token-state-interaction", choices=["naive_gated_add", "state_query", "state_kv_modulation"], default="naive_gated_add")
+    parser.add_argument("--state-summary-dim", type=int, default=128)
+    parser.add_argument("--use-state-delta", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--state-conditioning-scale-init", type=float, default=0.0)
+    parser.add_argument("--content-memory-enabled", action="store_true")
+    parser.add_argument("--content-memory-slots", type=int, default=1)
+    parser.add_argument("--content-memory-read-enabled", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--content-memory-use-state-delta", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--content-memory-intervention", choices=["normal", "zero_delta", "permute_delta", "write_off", "readout_off", "permute_memory"], default="normal")
     parser.add_argument(
         "--minimal-ff-size", type=int, default=None,
         help="Override Minimal FFN width; 5248 is the registered Hybrid parameter match.",
@@ -753,6 +762,14 @@ def main() -> int:
                 window_size_chunks=args.attention_window_chunks,
                 num_sink_tokens=4,
                 ff_size=args.minimal_ff_size,
+                token_state_interaction=args.token_state_interaction,
+                state_summary_dim=args.state_summary_dim,
+                use_state_delta=args.use_state_delta,
+                state_conditioning_scale_init=args.state_conditioning_scale_init,
+                content_memory_enabled=args.content_memory_enabled,
+                content_memory_slots=args.content_memory_slots,
+                content_memory_read_enabled=args.content_memory_read_enabled,
+                content_memory_use_state_delta=args.content_memory_use_state_delta,
             ),
         )
         client.controller.configure_rollout_diagnostics(
@@ -774,6 +791,9 @@ def main() -> int:
         )
         client.controller.configure_state_intervention(
             args.training_state_intervention
+        )
+        client.controller.configure_content_memory_intervention(
+            args.content_memory_intervention
         )
     raw = model.denoiser.model
     if args.train_scope in {"denoiser", "recurrent"}:
@@ -1535,6 +1555,14 @@ def main() -> int:
             "attention_window_chunks": args.attention_window_chunks,
             "minimal_ff_size": args.minimal_ff_size,
             "training_state_intervention": args.training_state_intervention,
+            "token_state_interaction": args.token_state_interaction,
+            "state_summary_dim": args.state_summary_dim,
+            "use_state_delta": args.use_state_delta,
+            "content_memory_enabled": args.content_memory_enabled,
+            "content_memory_slots": args.content_memory_slots,
+            "content_memory_read_enabled": args.content_memory_read_enabled,
+            "content_memory_use_state_delta": args.content_memory_use_state_delta,
+            "content_memory_intervention": args.content_memory_intervention,
             "keep_last_checkpoints": args.keep_last_checkpoints,
         }
         body = _unwrap_block(model.body_model)

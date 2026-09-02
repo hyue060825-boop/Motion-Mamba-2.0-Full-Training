@@ -25,6 +25,10 @@ class SequenceKernelConfig:
     state_summary_dim: int = 128
     use_state_delta: bool = True
     state_conditioning_scale_init: float = 0.0
+    content_memory_enabled: bool = False
+    content_memory_slots: int = 1
+    content_memory_read_enabled: bool = True
+    content_memory_use_state_delta: bool = True
 
     def __post_init__(self) -> None:
         if self.mode not in {"minimal", "hybrid"}:
@@ -46,6 +50,10 @@ class SequenceKernelConfig:
             raise ValueError("minimal mode cannot enable token/state interaction")
         if self.state_summary_dim <= 0:
             raise ValueError("state_summary_dim must be positive")
+        if self.content_memory_slots <= 0:
+            raise ValueError("content_memory_slots must be positive")
+        if self.content_memory_enabled and self.mode != "hybrid":
+            raise ValueError("content memory requires hybrid mode")
 
     @property
     def d_model(self) -> int:
