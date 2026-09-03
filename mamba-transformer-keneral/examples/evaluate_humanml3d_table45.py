@@ -30,6 +30,10 @@ for path in (
 
 from ardy_data import HumanML3DArdyDataset  # noqa: E402
 from train_humanml3d_ardy_tiny import _load_denoiser_weights, _replace_stats  # noqa: E402
+from evaluation_checkpoint_config import (  # noqa: E402
+    add_sequence_checkpoint_arguments,
+    sequence_config_kwargs,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -80,6 +84,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--per-sample-output", default=None)
     parser.add_argument("--attention-window-chunks", type=int, default=4)
     parser.add_argument("--minimal-ff-size", type=int, default=None)
+    add_sequence_checkpoint_arguments(parser)
     return parser.parse_args()
 
 
@@ -214,6 +219,7 @@ def main() -> int:
         # released-checkpoint reference instead of mutating its normalization.
         dataset_stats_dir = model.motion_rep.stats.folder
     raw = model.denoiser.model
+    sequence_architecture = None
     if args.mode == "original":
         client = model
         if args.checkpoint is not None:
@@ -229,6 +235,10 @@ def main() -> int:
             raw = model.denoiser.model
             _load_denoiser_weights(raw, checkpoint)
     else:
+        checkpoint = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
+        sequence_kwargs, sequence_architecture = sequence_config_kwargs(
+            args, checkpoint
+        )
         client = install_ardy_sequence_kernel(
             model,
             ArdySequenceKernelConfig(
@@ -237,9 +247,9 @@ def main() -> int:
                 window_size_chunks=args.attention_window_chunks,
                 num_sink_tokens=4,
                 ff_size=args.minimal_ff_size,
+                **sequence_kwargs,
             ),
         )
-        checkpoint = torch.load(args.checkpoint, map_location=device, weights_only=False)
         if checkpoint.get("model", args.model) != args.model:
             raise ValueError(
                 f"checkpoint model={checkpoint.get('model')!r}, requested model={args.model!r}"
@@ -501,6 +511,7 @@ def main() -> int:
         "history_frames": history_frames,
         "attention_window_chunks": args.attention_window_chunks,
         "minimal_ff_size": args.minimal_ff_size,
+        "sequence_architecture": sequence_architecture,
         # Original ARDY carries generated motion through its autoregressive
         # history sequence; it has no adapter-owned persistent KV/Mamba state.
         "memory_mode": "explicit_history" if args.mode == "original" else args.memory_mode,

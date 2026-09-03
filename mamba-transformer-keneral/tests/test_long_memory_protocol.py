@@ -77,9 +77,80 @@ def test_mamba_only_intervention_preserves_attention_checksum():
     assert controller.intervention_audit[0]["attention_checksum_before"] == before
 
 
-def test_permutation_requires_non_singleton_batch():
-    # The production intervention rejects B=1 rather than silently becoming identity.
-    assert torch.roll(torch.arange(2), 1).tolist() == [1, 0]
+def _content_intervention_controller(batch_size=2):
+    cache = ChunkSlidingWindowKVCache(
+        batch_size=batch_size, num_heads=1, head_dim=2, window_size_chunks=4,
+        num_sink_tokens=0, device="cpu", dtype=torch.float32,
+    )
+    cache.append(
+        torch.randn(batch_size, 1, 2, 2),
+        torch.randn(batch_size, 1, 2, 2),
+        chunk_id=0,
+    )
+    memory = torch.arange(batch_size * 6, dtype=torch.float32).reshape(
+        batch_size, 2, 3
+    )
+    layer = SimpleNamespace(
+        attention_cache=cache,
+        mamba_state=None,
+        state_summary=None,
+        state_delta=None,
+        persistent_memory=memory,
+    )
+    block = SimpleNamespace(
+        _sequence_state=SimpleNamespace(layers=[layer]),
+        content_memory_read_enabled_runtime=None,
+        content_memory_write_enabled_runtime=True,
+        content_memory_delta_mode_runtime="normal",
+    )
+    controller = ArdyDiffusionMemoryController.__new__(ArdyDiffusionMemoryController)
+    controller.root_block = block
+    controller.body_block = SimpleNamespace(
+        _sequence_state=None,
+        content_memory_read_enabled_runtime=None,
+        content_memory_write_enabled_runtime=True,
+        content_memory_delta_mode_runtime="normal",
+    )
+    controller._completed_windows = 4
+    controller._content_memory_permutation_applied = False
+    controller.content_memory_audit = []
+    return controller, layer
+
+
+def test_content_memory_interventions_have_all_write_semantics():
+    controller, _ = _content_intervention_controller()
+    for strategy, expected_write, expected_delta in (
+        ("write_off", False, "normal"),
+        ("zero_delta", True, "zero"),
+        ("permute_delta", True, "permute"),
+    ):
+        controller.content_memory_intervention = strategy
+        controller._set_content_memory_runtime()
+        assert controller.root_block.content_memory_write_enabled_runtime is expected_write
+        assert controller.root_block.content_memory_delta_mode_runtime == expected_delta
+
+
+def test_content_memory_permutation_runs_once_and_preserves_attention():
+    controller, layer = _content_intervention_controller()
+    controller.content_memory_intervention = "permute_memory"
+    before_attention = controller._attention_checksum()
+    original = layer.persistent_memory.clone()
+    controller._maybe_permute_content_memory()
+    torch.testing.assert_close(layer.persistent_memory, original.roll(1, dims=0))
+    assert controller._attention_checksum() == before_attention
+    assert len(controller.content_memory_audit) == 1
+    once = layer.persistent_memory.clone()
+    controller._completed_windows = 5
+    controller._maybe_permute_content_memory()
+    torch.testing.assert_close(layer.persistent_memory, once)
+    assert len(controller.content_memory_audit) == 1
+
+
+def test_content_memory_permutation_requires_non_singleton_batch():
+    controller, _ = _content_intervention_controller(batch_size=1)
+    controller.content_memory_intervention = "permute_memory"
+    with pytest.raises(ValueError, match="batch size > 1"):
+        controller._maybe_permute_content_memory()
 
 
 def _panel_row(panel_id="p0"):

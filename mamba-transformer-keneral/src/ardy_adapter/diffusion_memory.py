@@ -74,21 +74,26 @@ class ArdyDiffusionMemoryController:
         self._intervention_applied_window: Optional[int] = None
         self.intervention_audit: list[dict[str, Any]] = []
         self.content_memory_intervention = "normal"
+        self._content_memory_permutation_applied = False
+        self.content_memory_audit: list[dict[str, Any]] = []
 
     def configure_content_memory_intervention(self, strategy: str = "normal") -> None:
         allowed = {"normal", "zero_delta", "permute_delta", "write_off", "readout_off", "permute_memory"}
         if strategy not in allowed:
             raise ValueError(f"unknown content-memory intervention {strategy!r}")
         self.content_memory_intervention = strategy
+        self._content_memory_permutation_applied = False
+        self.content_memory_audit.clear()
         self._set_content_memory_runtime()
 
-    def _set_content_memory_runtime(self, *, cue_window: bool = False) -> None:
+    def _set_content_memory_runtime(self) -> None:
         strategy = getattr(self, "content_memory_intervention", "normal")
         read_enabled = not (strategy == "readout_off" and self._completed_windows >= 4)
-        write_enabled = not (strategy == "write_off" and cue_window)
-        mode = "normal"
-        if cue_window and strategy in {"zero_delta", "permute_delta"}:
-            mode = "zero" if strategy == "zero_delta" else "permute"
+        write_enabled = strategy != "write_off"
+        mode = {
+            "zero_delta": "zero",
+            "permute_delta": "permute",
+        }.get(strategy, "normal")
         for block in (self.root_block, self.body_block):
             block.content_memory_read_enabled_runtime = read_enabled
             block.content_memory_write_enabled_runtime = write_enabled
@@ -123,6 +128,8 @@ class ArdyDiffusionMemoryController:
             self._last_intervention_checksum = None
             self._intervention_applied_window = None
             self.intervention_audit.clear()
+            self._content_memory_permutation_applied = False
+            self.content_memory_audit.clear()
             self._set_runtime_mamba_output_scale(1.0)
             self._set_content_memory_runtime()
 
@@ -246,17 +253,13 @@ class ArdyDiffusionMemoryController:
 
     def _apply_mamba_state_intervention(self) -> None:
         strategy = self.state_intervention
+        self._set_content_memory_runtime()
+        self._maybe_permute_content_memory()
         if strategy in {"carry", "no_decay"}:
-            self._set_content_memory_runtime()
-            if (self.content_memory_intervention == "permute_memory" and self._completed_windows >= 4
-                    and self._intervention_applied_window != self._completed_windows):
-                self._permute_content_memory()
-                self._intervention_applied_window = self._completed_windows
             return
         if self._intervention_applied_window == self._completed_windows:
             return
         after_w4 = self._completed_windows >= 4
-        self._set_content_memory_runtime()
         if strategy in {"zero_after_w4", "freeze_after_w4", "permute_after_w4", "readout_off_after_w4"} and not after_w4:
             return
         attention_before = self._attention_checksum()
@@ -339,6 +342,45 @@ class ArdyDiffusionMemoryController:
             for layer in sequence_state.layers:
                 if layer.persistent_memory is not None:
                     layer.persistent_memory = layer.persistent_memory.index_select(0, permutation.to(layer.persistent_memory.device))
+
+    def _maybe_permute_content_memory(self) -> None:
+        if (
+            getattr(self, "content_memory_intervention", "normal") != "permute_memory"
+            or self._completed_windows < 4
+            or self._content_memory_permutation_applied
+        ):
+            return
+        attention_before = self._attention_checksum()
+        memory_before = self._content_memory_checksum()
+        self._permute_content_memory()
+        attention_after = self._attention_checksum()
+        if attention_after != attention_before:
+            raise RuntimeError("content-memory permutation modified Attention K/V")
+        self._content_memory_permutation_applied = True
+        self.content_memory_audit.append({
+            "strategy": "permute_memory",
+            "completed_windows": self._completed_windows,
+            "attention_checksum_before": attention_before,
+            "attention_checksum_after": attention_after,
+            "memory_checksum_before": memory_before,
+            "memory_checksum_after": self._content_memory_checksum(),
+        })
+
+    def _content_memory_checksum(self) -> str:
+        import hashlib
+        digest = hashlib.sha256()
+        found = False
+        for block in (self.root_block, self.body_block):
+            state = block._sequence_state
+            if state is None:
+                continue
+            for layer in state.layers:
+                if layer.persistent_memory is not None:
+                    found = True
+                    digest.update(
+                        layer.persistent_memory.detach().float().cpu().contiguous().numpy().tobytes()
+                    )
+        return digest.hexdigest() if found else "none"
 
     def configure_mamba_output_decay(
         self,
@@ -523,6 +565,23 @@ class ArdyDiffusionMemoryController:
                         tensor.numel() * tensor.element_size()
                         for tensor in self._state_tensors(mamba_state)
                     )
+                    content_memory = layer_state.persistent_memory
+                    content_memory_bytes = (
+                        0
+                        if content_memory is None
+                        else content_memory.numel() * content_memory.element_size()
+                    )
+                    content_memory_norm = (
+                        None
+                        if content_memory is None
+                        else float(content_memory.detach().float().norm(dim=-1).mean())
+                    )
+                    content_module = getattr(mixer, "content_memory", None)
+                    content_read_scale = (
+                        None
+                        if content_module is None
+                        else float(content_module.read_residual_scale.detach().float())
+                    )
                     finite = all(
                         bool(torch.isfinite(tensor).all())
                         for tensor in self._state_tensors(mamba_state)
@@ -537,7 +596,12 @@ class ArdyDiffusionMemoryController:
                             "attention_history_tokens": cache.num_history_tokens,
                             "attention_state_bytes": attention_bytes,
                             "mamba_state_bytes": mamba_bytes,
-                            "persistent_state_bytes": attention_bytes + mamba_bytes,
+                            "content_memory_bytes": content_memory_bytes,
+                            "content_memory_norm": content_memory_norm,
+                            "content_memory_read_residual_scale": content_read_scale,
+                            "persistent_state_bytes": (
+                                attention_bytes + mamba_bytes + content_memory_bytes
+                            ),
                             "fusion_gate": fusion_gate,
                             "finite": finite,
                         }
@@ -586,6 +650,7 @@ class ArdyDiffusionMemoryController:
         """Commit a ground-truth prefix before cache-only autoregressive rollout."""
         if not self.commit_enabled:
             raise RuntimeError("this sequence kernel has no persistent history state")
+        self._set_content_memory_runtime()
         canonical_history_prime(
             self.raw_denoiser,
             history_hybrid,
@@ -670,21 +735,19 @@ class ArdyDiffusionMemoryController:
                     next_heading_angle.detach().clone(),
                 )
                 )
-        # D interventions apply only to the first accepted cue-window write;
-        # all noisy forwards remain read-only and later commits are normal.
-        self._set_content_memory_runtime(cue_window=(self._completed_windows == 0))
-        try:
-            canonical_history_prime(
-                self.raw_denoiser,
-                history_hybrid,
-                text_feat=self._last_text_feat,
-                text_pad_mask=self._last_text_pad_mask,
-                first_heading_angle=next_heading_angle,
-                next_generation_frames=generation_frames,
-                chunk_id=self._next_chunk_id,
-            )
-        finally:
-            self._set_content_memory_runtime()
+        # Content interventions have explicit all-write semantics. Diffusion
+        # forwards remain read-only, while every accepted history write uses
+        # the same registered intervention.
+        self._set_content_memory_runtime()
+        canonical_history_prime(
+            self.raw_denoiser,
+            history_hybrid,
+            text_feat=self._last_text_feat,
+            text_pad_mask=self._last_text_pad_mask,
+            first_heading_angle=next_heading_angle,
+            next_generation_frames=generation_frames,
+            chunk_id=self._next_chunk_id,
+        )
         self._next_chunk_id += 1
         self._completed_windows += 1
         self._accepted_commits += 1

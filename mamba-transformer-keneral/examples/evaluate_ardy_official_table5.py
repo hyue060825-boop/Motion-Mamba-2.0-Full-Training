@@ -38,6 +38,10 @@ from evaluate_humanml3d_table45 import (  # noqa: E402
     _skate_counts,
 )
 from train_humanml3d_ardy_tiny import _load_denoiser_weights, _replace_stats  # noqa: E402
+from evaluation_checkpoint_config import (  # noqa: E402
+    add_sequence_checkpoint_arguments,
+    sequence_config_kwargs,
+)
 from long_memory_protocol import file_sha256, verify_locked_final_guard  # noqa: E402
 from long_memory_protocol import first_threshold_window, window_summary  # noqa: E402
 
@@ -94,6 +98,15 @@ def parse_args() -> argparse.Namespace:
                  "permute_after_w4", "readout_off_after_w4", "no_decay"],
         default="carry",
     )
+    parser.add_argument(
+        "--content-memory-intervention",
+        choices=[
+            "normal", "zero_delta", "permute_delta", "write_off",
+            "readout_off", "permute_memory",
+        ],
+        default="normal",
+    )
+    add_sequence_checkpoint_arguments(parser)
     return parser.parse_args()
 
 
@@ -241,8 +254,12 @@ def _build_official_sample(
     return output
 
 
-def _load_checkpoint(model, mode: str, checkpoint_path: str, device: torch.device) -> dict:
-    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
+def _load_checkpoint(
+    model, mode: str, checkpoint_path: str, device: torch.device,
+    checkpoint: dict | None = None,
+) -> dict:
+    if checkpoint is None:
+        checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
     if checkpoint.get("mode") != mode:
         raise ValueError(f"checkpoint mode={checkpoint.get('mode')!r}, requested mode={mode!r}")
     raw = model.denoiser.model
@@ -272,6 +289,11 @@ def main() -> int:
         raise ValueError("native ARDY has no adapter-owned recurrent state")
     device = torch.device(args.device)
     torch.cuda.set_device(device)
+    checkpoint = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
+    if checkpoint.get("mode") != args.mode:
+        raise ValueError(
+            f"checkpoint mode={checkpoint.get('mode')!r}, requested mode={args.mode!r}"
+        )
 
     from ardy.model import load_model
     from ardy.motion_rep.tools import length_to_mask
@@ -281,7 +303,11 @@ def main() -> int:
     _replace_stats(model, args.stats_dir)
     if args.mode == "original":
         client = model
+        sequence_architecture = None
     else:
+        sequence_kwargs, sequence_architecture = sequence_config_kwargs(
+            args, checkpoint
+        )
         client = install_ardy_sequence_kernel(
             model,
             ArdySequenceKernelConfig(
@@ -290,6 +316,7 @@ def main() -> int:
                 window_size_chunks=args.attention_window_chunks,
                 num_sink_tokens=4,
                 ff_size=args.minimal_ff_size,
+                **sequence_kwargs,
             ),
         )
         client.controller.configure_rollout_diagnostics(
@@ -302,7 +329,12 @@ def main() -> int:
             min_scale=args.mamba_output_decay_min_scale,
         )
         client.controller.configure_state_intervention(args.state_intervention)
-    checkpoint = _load_checkpoint(model, args.mode, args.checkpoint, device)
+        client.controller.configure_content_memory_intervention(
+            args.content_memory_intervention
+        )
+    checkpoint = _load_checkpoint(
+        model, args.mode, args.checkpoint, device, checkpoint=checkpoint
+    )
     if checkpoint.get("model", args.model) != args.model:
         raise ValueError(f"checkpoint model={checkpoint.get('model')!r}, requested model={args.model!r}")
     raw = model.denoiser.model
@@ -443,6 +475,7 @@ def main() -> int:
     artifact_goal_frames = []
     artifact_goal_joints = []
     state_diagnostics = []
+    content_memory_audit = []
     per_sample_rows = []
     num_windows = math.ceil(generation_frames / horizon)
     window_root_errors = [[] for _ in range(num_windows)]
@@ -548,6 +581,15 @@ def main() -> int:
                         for record in client.controller.state_diagnostics
                     )
                     client.controller.state_diagnostics.clear()
+                content_memory_audit.extend(
+                    {
+                        "batch_start": start,
+                        "sample_ids": [item["id"] for item in items],
+                        **record,
+                    }
+                    for record in client.controller.content_memory_audit
+                )
+                client.controller.content_memory_audit.clear()
         torch.cuda.synchronize(device)
         latencies.extend([(time.perf_counter() - started) / size] * size)
 
@@ -770,6 +812,21 @@ def main() -> int:
         for layer in diagnostic_layers
         if layer["mamba_state_drift_norm"] is not None
     ]
+    content_norms = [
+        layer["content_memory_norm"]
+        for layer in diagnostic_layers
+        if layer.get("content_memory_norm") is not None
+    ]
+    content_bytes = [
+        layer["content_memory_bytes"]
+        for layer in diagnostic_layers
+        if layer.get("content_memory_bytes") is not None
+    ]
+    content_read_scales = [
+        layer["content_memory_read_residual_scale"]
+        for layer in diagnostic_layers
+        if layer.get("content_memory_read_residual_scale") is not None
+    ]
     result = {
         "status": "PASS" if all(np.isfinite(finite_values)) else "FAIL",
         "metric_scope": (
@@ -816,6 +873,8 @@ def main() -> int:
         "attention_window_chunks": args.attention_window_chunks,
         "minimal_ff_size": args.minimal_ff_size,
         "state_intervention": args.state_intervention,
+        "content_memory_intervention": args.content_memory_intervention,
+        "sequence_architecture": sequence_architecture,
         "state_intervention_checksum": (
             getattr(client.controller, "_last_intervention_checksum", None)
             if args.mode != "original" else None
@@ -831,6 +890,13 @@ def main() -> int:
         ),
         "mamba_state_norm_max": max(mamba_norms) if mamba_norms else None,
         "mamba_state_drift_norm_max": max(mamba_drifts) if mamba_drifts else None,
+        "content_memory_norm_max": max(content_norms) if content_norms else None,
+        "content_memory_bytes_max_per_layer": max(content_bytes) if content_bytes else None,
+        "content_memory_read_residual_scale_max_abs": (
+            max(abs(value) for value in content_read_scales)
+            if content_read_scales else None
+        ),
+        "content_memory_intervention_events": len(content_memory_audit),
         "r_precision": None,
         "fid": None,
         "constraint_error_cm_mean": float(np.mean(constraint_errors)),
@@ -900,6 +966,12 @@ def main() -> int:
                     if args.mode != "original" else []
                 )
             )
+        )
+        content_intervention_path = diagnostics_path.with_suffix(
+            diagnostics_path.suffix + ".content_interventions.jsonl"
+        )
+        content_intervention_path.write_text(
+            "".join(json.dumps(record) + "\n" for record in content_memory_audit)
         )
     if args.per_sample_output:
         per_sample_path = Path(args.per_sample_output)
