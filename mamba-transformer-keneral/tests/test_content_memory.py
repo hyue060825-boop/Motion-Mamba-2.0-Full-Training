@@ -178,4 +178,5 @@ def test_neutral_content_memory_is_exact_baseline_parity():
     )
     expected, _, _ = control.forward_chunk(x, state=control.init_state(batch_size=2))
     torch.testing.assert_close(candidate, expected, rtol=0, atol=0)
-    assert candidate_aux["persistent_content_memory"]["read_enabled"] is False
+    assert candidate_aux["persistent_content_memory"]["read_enabled"] is True
+    assert candidate_aux["persistent_content_memory"]["read_residual_scale"] == 0.0

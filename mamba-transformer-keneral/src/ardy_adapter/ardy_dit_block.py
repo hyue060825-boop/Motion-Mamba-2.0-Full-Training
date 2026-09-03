@@ -77,11 +77,21 @@ class ArdyDiTSequenceBlock(nn.Module):
         state_summary_dim: int = 128,
         use_state_delta: bool = True,
         state_conditioning_scale_init: float = 0.0,
+        state_aware_output_mode: Literal[
+            "attention_only", "native_gated_add"
+        ] = "attention_only",
         fusion_gate_logit_init: float = 0.0,
         content_memory_enabled: bool = False,
         content_memory_slots: int = 1,
         content_memory_read_enabled: bool = True,
         content_memory_use_state_delta: bool = True,
+        content_memory_write_gate_context: Literal[
+            "previous_memory", "proposal"
+        ] = "previous_memory",
+        content_memory_decoder_init_scale: float = 0.02,
+        content_memory_write_gate_init_scale: float = 0.02,
+        content_memory_write_gate_bias_init: float = 0.0,
+        content_memory_read_scale_init: float = 0.0,
         mamba_factory: Optional[MambaFactory] = None,
         device=None,
         **_ignored,
@@ -154,11 +164,17 @@ class ArdyDiTSequenceBlock(nn.Module):
                 state_summary_dim=state_summary_dim,
                 use_state_delta=use_state_delta,
                 state_conditioning_scale_init=state_conditioning_scale_init,
+                state_aware_output_mode=state_aware_output_mode,
                 fusion_gate_logit_init=fusion_gate_logit_init,
                 content_memory_enabled=content_memory_enabled,
                 content_memory_slots=content_memory_slots,
                 content_memory_read_enabled=content_memory_read_enabled,
                 content_memory_use_state_delta=content_memory_use_state_delta,
+                content_memory_write_gate_context=content_memory_write_gate_context,
+                content_memory_decoder_init_scale=content_memory_decoder_init_scale,
+                content_memory_write_gate_init_scale=content_memory_write_gate_init_scale,
+                content_memory_write_gate_bias_init=content_memory_write_gate_bias_init,
+                content_memory_read_scale_init=content_memory_read_scale_init,
             )
             if kernel_mode == "minimal":
                 return SequenceKernel(config)
@@ -218,6 +234,14 @@ class ArdyDiTSequenceBlock(nn.Module):
                     mixer.token_state_interaction.scale.data = (
                         mixer.token_state_interaction.scale.data.float()
                     )
+                    if mixer.fusion_gate_logit is not None:
+                        mixer.fusion_gate_logit.data = (
+                            mixer.fusion_gate_logit.data.float()
+                        )
+                    if mixer.content_memory is not None:
+                        mixer.content_memory.read_gate.data = (
+                            mixer.content_memory.read_gate.data.float()
+                        )
                 elif mixer.uses_output_interaction:
                     mixer.output_interaction.scale.data = (
                         mixer.output_interaction.scale.data.float()

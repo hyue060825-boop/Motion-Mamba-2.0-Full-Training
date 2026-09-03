@@ -25,10 +25,20 @@ class SequenceKernelConfig:
     state_summary_dim: int = 128
     use_state_delta: bool = True
     state_conditioning_scale_init: float = 0.0
+    state_aware_output_mode: Literal[
+        "attention_only", "native_gated_add"
+    ] = "attention_only"
     content_memory_enabled: bool = False
     content_memory_slots: int = 1
     content_memory_read_enabled: bool = True
     content_memory_use_state_delta: bool = True
+    content_memory_write_gate_context: Literal[
+        "previous_memory", "proposal"
+    ] = "previous_memory"
+    content_memory_decoder_init_scale: float = 0.02
+    content_memory_write_gate_init_scale: float = 0.02
+    content_memory_write_gate_bias_init: float = 0.0
+    content_memory_read_scale_init: float = 0.0
 
     def __post_init__(self) -> None:
         if self.mode not in {"minimal", "hybrid"}:
@@ -54,6 +64,26 @@ class SequenceKernelConfig:
             raise ValueError("content_memory_slots must be positive")
         if self.content_memory_enabled and self.mode != "hybrid":
             raise ValueError("content memory requires hybrid mode")
+        if self.state_aware_output_mode not in {
+            "attention_only", "native_gated_add"
+        }:
+            raise ValueError("invalid state-aware output mode")
+        if (
+            self.state_aware_output_mode != "attention_only"
+            and self.interaction not in {"state_query", "state_kv_modulation"}
+        ):
+            raise ValueError(
+                "state-aware output mode applies only to state-query/state-KV interactions"
+            )
+        if self.content_memory_write_gate_context not in {
+            "previous_memory", "proposal"
+        }:
+            raise ValueError("invalid content-memory write-gate context")
+        if (
+            self.content_memory_decoder_init_scale <= 0
+            or self.content_memory_write_gate_init_scale <= 0
+        ):
+            raise ValueError("content-memory initialization scales must be positive")
 
     @property
     def d_model(self) -> int:

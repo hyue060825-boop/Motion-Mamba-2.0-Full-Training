@@ -50,7 +50,7 @@ def parse_args():
     parser.add_argument("--model", default="core")
     parser.add_argument(
         "--train-scope",
-        choices=["mixer", "denoiser", "recurrent"],
+        choices=["mixer", "denoiser", "recurrent", "state_memory"],
         default="denoiser",
     )
     parser.add_argument("--steps", type=int, required=True)
@@ -109,6 +109,7 @@ def parse_args():
             "generated_gate_v1",
             "generated_deep_v3",
             "generated_multidepth_v4",
+            "d2_three_window_v1",
         ],
         default="uniform_range",
         help=(
@@ -117,7 +118,8 @@ def parse_args():
             "generated_gate_v1 uses 50%% x2, 20%% x3, 20%% x4, and 10%% x5; "
             "generated_deep_v3 uses the same teacher branch and generated targets "
             "at x3/x5/x10/x19; generated_multidepth_v4 biases generated targets "
-            "toward x10/x19 while retaining the same teacher branch."
+            "toward x10/x19 while retaining the same teacher branch; "
+            "d2_three_window_v1 fixes seed/generated/target for D2 write training."
         ),
     )
     parser.add_argument(
@@ -204,10 +206,24 @@ def parse_args():
     parser.add_argument("--state-summary-dim", type=int, default=128)
     parser.add_argument("--use-state-delta", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--state-conditioning-scale-init", type=float, default=0.0)
+    parser.add_argument(
+        "--state-aware-output-mode",
+        choices=["attention_only", "native_gated_add"],
+        default="attention_only",
+    )
     parser.add_argument("--content-memory-enabled", action="store_true")
     parser.add_argument("--content-memory-slots", type=int, default=1)
     parser.add_argument("--content-memory-read-enabled", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--content-memory-use-state-delta", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument(
+        "--content-memory-write-gate-context",
+        choices=["previous_memory", "proposal"],
+        default="previous_memory",
+    )
+    parser.add_argument("--content-memory-decoder-init-scale", type=float, default=0.02)
+    parser.add_argument("--content-memory-write-gate-init-scale", type=float, default=0.02)
+    parser.add_argument("--content-memory-write-gate-bias-init", type=float, default=0.0)
+    parser.add_argument("--content-memory-read-scale-init", type=float, default=0.0)
     parser.add_argument("--content-memory-intervention", choices=["normal", "zero_delta", "permute_delta", "write_off", "readout_off", "permute_memory"], default="normal")
     parser.add_argument(
         "--minimal-ff-size", type=int, default=None,
@@ -280,6 +296,72 @@ def _mean_across_ranks(value: torch.Tensor) -> float:
     return float(reduced)
 
 
+D2_GRADIENT_GROUP_PATTERNS = {
+    "state_projector_grad_norm": (".state_projector.",),
+    "state_address_grad_norm": (".token_state_interaction.",),
+    "content_decoder_grad_norm": (".content_memory.content_decoder.",),
+    "write_gate_grad_norm": (".content_memory.write_gate.",),
+    "read_scale_grad_norm": (".content_memory.read_gate",),
+}
+
+
+def _d2_gradient_groups(raw) -> dict[str, list[torch.nn.Parameter]]:
+    groups = {}
+    for group, patterns in D2_GRADIENT_GROUP_PATTERNS.items():
+        groups[group] = [
+            parameter
+            for name, parameter in raw.named_parameters()
+            if parameter.requires_grad and any(pattern in name for pattern in patterns)
+        ]
+    return groups
+
+
+def _gradient_group_norm(parameters: list[torch.nn.Parameter]) -> torch.Tensor:
+    tensors = [
+        parameter.grad.detach().float()
+        for parameter in parameters
+        if parameter.grad is not None
+    ]
+    if not tensors:
+        device = parameters[0].device if parameters else torch.device("cpu")
+        return torch.zeros((), device=device)
+    return torch.stack([gradient.square().sum() for gradient in tensors]).sum().sqrt()
+
+
+D2_MEMORY_DIAGNOSTIC_KEYS = (
+    "memory_slot_norm",
+    "memory_update_norm",
+    "write_gate_mean",
+    "write_gate_min",
+    "write_gate_max",
+    "read_residual_scale",
+    "state_summary_norm",
+    "state_delta_norm",
+    "content_proposal_norm",
+    "augmented_minus_base_attention_norm",
+)
+
+
+def _d2_memory_diagnostics(raw, device: torch.device) -> dict[str, float | None]:
+    model = _unwrap_raw(raw)
+    collected = {key: [] for key in D2_MEMORY_DIAGNOSTIC_KEYS}
+    for block in (_unwrap_block(model.root_model), _unwrap_block(model.body_model)):
+        for layer in block.sequence_stack.layers:
+            diagnostic = layer.mixer.last_content_memory_diagnostics
+            for key in D2_MEMORY_DIAGNOSTIC_KEYS:
+                value = diagnostic.get(key)
+                if value is not None:
+                    collected[key].append(float(value))
+    result = {}
+    for key, values in collected.items():
+        if not values:
+            result[key] = None
+            continue
+        local = torch.tensor(sum(values) / len(values), device=device)
+        result[key] = _mean_across_ranks(local)
+    return result
+
+
 def _ddp_no_sync_context(raw):
     """Disable gradient synchronization for every DDP wrapper in one raw pass."""
     stack = ExitStack()
@@ -347,6 +429,15 @@ RESUME_CONTRACT_KEYS = (
     "differentiable_rollout_warm_prefix_windows", "long_slope_loss_weight",
     "long_auc_loss_weight", "long_final_loss_weight",
     "long_slope_margin_cm_per_window", "attention_window_chunks",
+    "token_state_interaction", "state_summary_dim", "use_state_delta",
+    "state_conditioning_scale_init", "state_aware_output_mode",
+    "content_memory_enabled", "content_memory_slots",
+    "content_memory_read_enabled", "content_memory_use_state_delta",
+    "content_memory_write_gate_context",
+    "content_memory_decoder_init_scale",
+    "content_memory_write_gate_init_scale",
+    "content_memory_write_gate_bias_init",
+    "content_memory_read_scale_init",
     "minimal_ff_size", "training_state_intervention",
     "mamba_output_decay_start_windows",
     "mamba_output_decay_half_life_windows",
@@ -523,6 +614,7 @@ def _save_checkpoint(
     short_window_steps: int,
     rollout_window_counts: dict[int, int],
     differentiable_rollout_steps: int,
+    d2_gradient_update_counts: dict[str, int],
     data_generator: torch.Generator,
     elapsed_seconds: float,
     device: torch.device,
@@ -566,12 +658,15 @@ def _save_checkpoint(
             "short_window_steps": short_window_steps,
             "rollout_window_counts": rollout_window_counts,
             "differentiable_rollout_steps": differentiable_rollout_steps,
+            "d2_gradient_update_counts": d2_gradient_update_counts,
             "data_generator_state": data_generator.get_state(),
             "rng_by_rank": rng_by_rank,
             "elapsed_seconds": elapsed_seconds,
             "config": vars(args),
             "commit_protocol_version": (
-                "generated_history_endpoint_v9"
+                "d2_generated_history_bptt_v1"
+                if args.train_scope == "state_memory"
+                else "generated_history_endpoint_v9"
                 if args.generated_history_root_endpoint_loss_weight > 0
                 else "generated_history_state_consistency_v6"
                 if args.generated_history_state_consistency_weight > 0
@@ -646,6 +741,7 @@ def main() -> int:
         "generated_gate_v1": 5,
         "generated_deep_v3": 19,
         "generated_multidepth_v4": 19,
+        "d2_three_window_v1": 3,
     }.get(args.sequential_rollout_curriculum, args.sequential_rollout_windows)
     if args.sequential_rollout_min_windows < 2:
         raise ValueError("--sequential-rollout-min-windows must be at least 2")
@@ -658,7 +754,9 @@ def main() -> int:
         or args.generated_history_probability_5k > 0
     )
     expected_curriculum = (
-        "generated_multidepth_v4"
+        "d2_three_window_v1"
+        if args.train_scope == "state_memory"
+        else "generated_multidepth_v4"
         if args.history_sampling_strategy == "multidepth_v4"
         else "generated_deep_v3"
         if args.history_sampling_strategy == "deep_v3"
@@ -687,6 +785,13 @@ def main() -> int:
         raise ValueError("generated-history-bptt-windows must be non-negative")
     if args.generated_history_bptt_windows and args.train_scope == "mixer":
         raise ValueError("generated-history BPTT requires outer denoiser DDP")
+    if args.train_scope == "state_memory":
+        if args.mode != "hybrid" or not args.content_memory_enabled:
+            raise ValueError("state_memory train scope requires Hybrid content memory")
+        if args.token_state_interaction not in {"state_query", "state_kv_modulation"}:
+            raise ValueError("state_memory train scope requires a state-aware interaction")
+        if args.generated_history_bptt_windows <= 0:
+            raise ValueError("state_memory train scope requires generated-history BPTT")
     if args.generated_history_state_consistency_weight < 0:
         raise ValueError("generated-history-state-consistency-weight must be non-negative")
     if (
@@ -766,10 +871,16 @@ def main() -> int:
                 state_summary_dim=args.state_summary_dim,
                 use_state_delta=args.use_state_delta,
                 state_conditioning_scale_init=args.state_conditioning_scale_init,
+                state_aware_output_mode=args.state_aware_output_mode,
                 content_memory_enabled=args.content_memory_enabled,
                 content_memory_slots=args.content_memory_slots,
                 content_memory_read_enabled=args.content_memory_read_enabled,
                 content_memory_use_state_delta=args.content_memory_use_state_delta,
+                content_memory_write_gate_context=args.content_memory_write_gate_context,
+                content_memory_decoder_init_scale=args.content_memory_decoder_init_scale,
+                content_memory_write_gate_init_scale=args.content_memory_write_gate_init_scale,
+                content_memory_write_gate_bias_init=args.content_memory_write_gate_bias_init,
+                content_memory_read_scale_init=args.content_memory_read_scale_init,
             ),
         )
         client.controller.configure_rollout_diagnostics(
@@ -796,19 +907,32 @@ def main() -> int:
             args.content_memory_intervention
         )
     raw = model.denoiser.model
-    if args.train_scope in {"denoiser", "recurrent"}:
+    if args.train_scope in {"denoiser", "recurrent", "state_memory"}:
         if args.train_scope == "denoiser":
             for parameter in raw.parameters():
                 parameter.requires_grad_(True)
-        else:
+        elif args.train_scope == "recurrent":
             if args.mode != "hybrid":
                 raise ValueError("recurrent train scope requires hybrid mode")
             for name, parameter in raw.named_parameters():
                 trainable = ".mamba_path." in name or name.endswith("fusion_gate_logit")
                 parameter.requires_grad_(trainable)
+        else:
+            for name, parameter in raw.named_parameters():
+                trainable = any(
+                    marker in name
+                    for marker in (
+                        ".state_projector.",
+                        ".token_state_interaction.",
+                        ".content_memory.",
+                    )
+                )
+                parameter.requires_grad_(trainable)
         raw = DDP(raw, device_ids=[local_rank], broadcast_buffers=False)
         raw.train()
-        parameters = [parameter for parameter in raw.parameters() if parameter.requires_grad]
+        parameters = [
+            parameter for parameter in raw.parameters() if parameter.requires_grad
+        ]
     else:
         for parameter in list(raw.root_model.parameters()) + list(raw.body_model.parameters()):
             parameter.requires_grad_(True)
@@ -818,7 +942,20 @@ def main() -> int:
         raw.body_model.train()
         parameters = list(raw.root_model.parameters()) + list(raw.body_model.parameters())
     optimizer = torch.optim.AdamW(parameters, lr=args.learning_rate)
+    d2_gradient_groups = (
+        _d2_gradient_groups(raw) if args.train_scope == "state_memory" else {}
+    )
+    if args.train_scope == "state_memory" and any(
+        not group for group in d2_gradient_groups.values()
+    ):
+        missing = [name for name, group in d2_gradient_groups.items() if not group]
+        raise RuntimeError(f"state_memory train scope is missing groups: {missing}")
     trainable_parameter_count = sum(parameter.numel() for parameter in parameters)
+    trainable_parameter_names = (
+        [name for name, parameter in raw.named_parameters() if parameter.requires_grad]
+        if args.train_scope == "state_memory"
+        else []
+    )
     model.diffusion.calc_diffusion_vars(torch.arange(model.diffusion.num_base_steps, device=device))
 
     train = HumanML3DArdyDataset(
@@ -913,6 +1050,12 @@ def main() -> int:
     short_window_steps = 0
     rollout_window_counts: dict[int, int] = {}
     differentiable_rollout_steps = 0
+    d2_gradient_update_counts = {
+        "updates_with_nonzero_content_decoder_grad": 0,
+        "updates_with_nonzero_write_gate_grad": 0,
+        "updates_with_nonzero_read_scale_grad": 0,
+    }
+    d2_last_memory_diagnostics = {}
     elapsed_before = 0.0
     if args.resume and args.init_checkpoint:
         raise ValueError("--resume and --init-checkpoint are mutually exclusive")
@@ -957,6 +1100,9 @@ def main() -> int:
         }
         differentiable_rollout_steps = int(
             resume.get("differentiable_rollout_steps", 0)
+        )
+        d2_gradient_update_counts = dict(
+            resume.get("d2_gradient_update_counts", d2_gradient_update_counts)
         )
         data_generator.set_state(resume["data_generator_state"].cpu())
         local_rng = resume["rng_by_rank"][rank]
@@ -1030,14 +1176,15 @@ def main() -> int:
                 args.sequential_cache_probability, data_generator, device, rank
             )
             if use_sequential_cache and args.sequential_rollout_curriculum in {
-                "long_horizon_v1", "generated_gate_v1"
+                "long_horizon_v1", "generated_gate_v1", "d2_three_window_v1"
             }:
                 curriculum_draw = _global_uniform_draw(data_generator, device, rank)
-                range_fn = (
-                    long_horizon_v1_window_range
-                    if args.sequential_rollout_curriculum == "long_horizon_v1"
-                    else generated_gate_v1_window_range
-                )
+                if args.sequential_rollout_curriculum == "long_horizon_v1":
+                    range_fn = long_horizon_v1_window_range
+                elif args.sequential_rollout_curriculum == "generated_gate_v1":
+                    range_fn = generated_gate_v1_window_range
+                else:
+                    range_fn = lambda _draw: (3, 3)
                 low, high = range_fn(curriculum_draw)
                 rollout_windows = _global_integer_draw(
                     low, high, data_generator, device, rank
@@ -1224,8 +1371,30 @@ def main() -> int:
         all_finite = all_finite and bool(finite_tensor.item())
         if not all_finite:
             raise RuntimeError(f"non-finite DDP gradient at step {step}")
+        d2_gradient_norms = {}
+        if args.train_scope == "state_memory":
+            d2_gradient_norms = {
+                name: _mean_across_ranks(_gradient_group_norm(group).to(device))
+                for name, group in d2_gradient_groups.items()
+            }
+            if rank == 0:
+                counter_map = {
+                    "content_decoder_grad_norm": "updates_with_nonzero_content_decoder_grad",
+                    "write_gate_grad_norm": "updates_with_nonzero_write_gate_grad",
+                    "read_scale_grad_norm": "updates_with_nonzero_read_scale_grad",
+                }
+                for metric, counter in counter_map.items():
+                    d2_gradient_update_counts[counter] += int(
+                        d2_gradient_norms[metric] > 0.0
+                    )
         grad_norm = torch.nn.utils.clip_grad_norm_(parameters, 1.0)
         optimizer.step()
+        d2_memory_diagnostics = (
+            _d2_memory_diagnostics(raw, device)
+            if args.train_scope == "state_memory"
+            else {}
+        )
+        d2_last_memory_diagnostics = d2_memory_diagnostics
         mean_loss = _mean_across_ranks(loss)
         depth_metrics = {}
         for supervision, components in depth_components:
@@ -1358,6 +1527,8 @@ def main() -> int:
                     "short_window": not use_sequential_cache,
                     "generated_history_raw_recovery_m_mean": mean_raw_recovery,
                     "generated_history_applied_recovery_m_mean": mean_applied_recovery,
+                    **d2_gradient_norms,
+                    **d2_memory_diagnostics,
                 }
                 with log_path.open("a") as handle:
                     handle.write(json.dumps(record) + "\n")
@@ -1386,6 +1557,7 @@ def main() -> int:
                 short_window_steps=short_window_steps,
                 rollout_window_counts=rollout_window_counts,
                 differentiable_rollout_steps=differentiable_rollout_steps,
+                d2_gradient_update_counts=d2_gradient_update_counts,
                 data_generator=data_generator,
                 elapsed_seconds=elapsed_before + time.perf_counter() - started,
                 device=device, rank=rank,
@@ -1461,6 +1633,8 @@ def main() -> int:
                 "commit_protocol_version": (
                     "differentiable_long_rollout_v1"
                     if args.differentiable_rollout_probability > 0
+                    else "d2_generated_history_bptt_v1"
+                    if args.train_scope == "state_memory"
                     else
                     "generated_history_endpoint_v9"
                     if generated_sampling_enabled
@@ -1544,7 +1718,14 @@ def main() -> int:
             "rollout_window_counts": rollout_window_counts,
             "differentiable_rollout_steps": differentiable_rollout_steps,
             "train_scope": args.train_scope,
+            "d2_gradient_update_counts": d2_gradient_update_counts,
+            "d2_gradient_update_fraction": {
+                key: value / max(args.steps, 1)
+                for key, value in d2_gradient_update_counts.items()
+            },
+            "d2_last_memory_diagnostics": d2_last_memory_diagnostics,
             "trainable_parameters": trainable_parameter_count,
+            "trainable_parameter_names": trainable_parameter_names,
             "elapsed_seconds": elapsed,
             "mean_step_seconds": elapsed / max(args.steps, 1),
             "samples_per_second": global_batch * args.steps / elapsed,
@@ -1558,11 +1739,17 @@ def main() -> int:
             "token_state_interaction": args.token_state_interaction,
             "state_summary_dim": args.state_summary_dim,
             "use_state_delta": args.use_state_delta,
+            "state_aware_output_mode": args.state_aware_output_mode,
             "content_memory_enabled": args.content_memory_enabled,
             "content_memory_slots": args.content_memory_slots,
             "content_memory_read_enabled": args.content_memory_read_enabled,
             "content_memory_use_state_delta": args.content_memory_use_state_delta,
             "content_memory_intervention": args.content_memory_intervention,
+            "content_memory_write_gate_context": args.content_memory_write_gate_context,
+            "content_memory_decoder_init_scale": args.content_memory_decoder_init_scale,
+            "content_memory_write_gate_init_scale": args.content_memory_write_gate_init_scale,
+            "content_memory_write_gate_bias_init": args.content_memory_write_gate_bias_init,
+            "content_memory_read_scale_init": args.content_memory_read_scale_init,
             "keep_last_checkpoints": args.keep_last_checkpoints,
         }
         body = _unwrap_block(model.body_model)
@@ -1599,6 +1786,7 @@ def main() -> int:
             short_window_steps=short_window_steps,
             rollout_window_counts=rollout_window_counts,
             differentiable_rollout_steps=differentiable_rollout_steps,
+            d2_gradient_update_counts=d2_gradient_update_counts,
             data_generator=data_generator, elapsed_seconds=elapsed,
             device=device, rank=rank,
         )

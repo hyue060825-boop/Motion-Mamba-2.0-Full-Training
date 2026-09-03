@@ -31,11 +31,21 @@ class ArdySequenceKernelConfig:
     state_summary_dim: int = 128
     use_state_delta: bool = True
     state_conditioning_scale_init: float = 0.0
+    state_aware_output_mode: Literal[
+        "attention_only", "native_gated_add"
+    ] = "attention_only"
     fusion_gate_logit_init: float = 0.0
     content_memory_enabled: bool = False
     content_memory_slots: int = 1
     content_memory_read_enabled: bool = True
     content_memory_use_state_delta: bool = True
+    content_memory_write_gate_context: Literal[
+        "previous_memory", "proposal"
+    ] = "previous_memory"
+    content_memory_decoder_init_scale: float = 0.02
+    content_memory_write_gate_init_scale: float = 0.02
+    content_memory_write_gate_bias_init: float = 0.0
+    content_memory_read_scale_init: float = 0.0
     ff_size: int | None = None
 
     def __post_init__(self) -> None:
@@ -53,6 +63,19 @@ class ArdySequenceKernelConfig:
             raise ValueError("content memory requires hybrid mode")
         if self.content_memory_slots <= 0:
             raise ValueError("content_memory_slots must be positive")
+        if self.state_aware_output_mode not in {
+            "attention_only", "native_gated_add"
+        }:
+            raise ValueError("invalid state-aware output mode")
+        if self.content_memory_write_gate_context not in {
+            "previous_memory", "proposal"
+        }:
+            raise ValueError("invalid content-memory write-gate context")
+        if (
+            self.content_memory_decoder_init_scale <= 0
+            or self.content_memory_write_gate_init_scale <= 0
+        ):
+            raise ValueError("content-memory initialization scales must be positive")
 
 
 def _copy_compatible_frontend(source: nn.Module, target: nn.Module) -> None:
@@ -134,11 +157,17 @@ def install_ardy_sequence_kernel(
         "state_summary_dim": config.state_summary_dim,
         "use_state_delta": config.use_state_delta,
         "state_conditioning_scale_init": config.state_conditioning_scale_init,
+        "state_aware_output_mode": config.state_aware_output_mode,
         "fusion_gate_logit_init": config.fusion_gate_logit_init,
         "content_memory_enabled": config.content_memory_enabled,
         "content_memory_slots": config.content_memory_slots,
         "content_memory_read_enabled": config.content_memory_read_enabled,
         "content_memory_use_state_delta": config.content_memory_use_state_delta,
+        "content_memory_write_gate_context": config.content_memory_write_gate_context,
+        "content_memory_decoder_init_scale": config.content_memory_decoder_init_scale,
+        "content_memory_write_gate_init_scale": config.content_memory_write_gate_init_scale,
+        "content_memory_write_gate_bias_init": config.content_memory_write_gate_bias_init,
+        "content_memory_read_scale_init": config.content_memory_read_scale_init,
     }
     root_kwargs = _block_kwargs(raw, old_root)
     body_kwargs = _block_kwargs(raw, old_body)

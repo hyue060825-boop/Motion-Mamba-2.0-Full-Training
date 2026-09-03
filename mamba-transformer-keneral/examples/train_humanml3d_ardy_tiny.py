@@ -42,7 +42,11 @@ def parse_args():
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--mode", choices=["minimal", "hybrid"], required=True)
     parser.add_argument("--model", default="core")
-    parser.add_argument("--train-scope", choices=["mixer", "denoiser"], default="denoiser")
+    parser.add_argument(
+        "--train-scope",
+        choices=["mixer", "denoiser", "state_memory"],
+        default="denoiser",
+    )
     parser.add_argument("--phase", choices=["tiny", "pilot"], default="tiny")
     parser.add_argument("--dev-manifest", default=None)
     parser.add_argument("--steps", type=int, default=50)
@@ -75,6 +79,37 @@ def parse_args():
     parser.add_argument("--long-slope-margin-cm-per-window", type=float, default=0.0)
     parser.add_argument("--rollout-gradient-checkpointing", action="store_true")
     parser.add_argument("--attention-window-chunks", type=int, default=4)
+    parser.add_argument(
+        "--token-state-interaction",
+        choices=["naive_gated_add", "state_query", "state_kv_modulation"],
+        default="naive_gated_add",
+    )
+    parser.add_argument("--state-summary-dim", type=int, default=128)
+    parser.add_argument(
+        "--use-state-delta", action=argparse.BooleanOptionalAction, default=True
+    )
+    parser.add_argument("--state-conditioning-scale-init", type=float, default=0.0)
+    parser.add_argument(
+        "--state-aware-output-mode",
+        choices=["attention_only", "native_gated_add"],
+        default="attention_only",
+    )
+    parser.add_argument("--content-memory-enabled", action="store_true")
+    parser.add_argument("--content-memory-slots", type=int, default=1)
+    parser.add_argument(
+        "--content-memory-use-state-delta",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+    )
+    parser.add_argument(
+        "--content-memory-write-gate-context",
+        choices=["previous_memory", "proposal"],
+        default="previous_memory",
+    )
+    parser.add_argument("--content-memory-decoder-init-scale", type=float, default=0.02)
+    parser.add_argument("--content-memory-write-gate-init-scale", type=float, default=0.02)
+    parser.add_argument("--content-memory-write-gate-bias-init", type=float, default=0.0)
+    parser.add_argument("--content-memory-read-scale-init", type=float, default=0.0)
     parser.add_argument(
         "--minimal-ff-size", type=int, default=None,
         help="Override Minimal FFN width; 5248 is the registered Hybrid parameter match.",
@@ -1362,6 +1397,15 @@ def main() -> int:
     if args.differentiable_rollout_probability:
         if not 6 <= args.differentiable_rollout_windows <= 8:
             raise ValueError("long-loss tiny rollout requires 6-8 windows")
+    if args.train_scope == "state_memory":
+        if args.mode != "hybrid" or not args.content_memory_enabled:
+            raise ValueError("state_memory train scope requires Hybrid content memory")
+        if args.token_state_interaction not in {"state_query", "state_kv_modulation"}:
+            raise ValueError("state_memory train scope requires a state-aware interaction")
+        if not args.differentiable_rollout_probability:
+            raise ValueError(
+                "tiny state_memory scope requires a differentiable rollout task"
+            )
     torch.manual_seed(args.seed)
     device = torch.device(args.device)
     torch.cuda.set_device(device)
@@ -1385,7 +1429,19 @@ def main() -> int:
             attention_backend="sdpa",
             window_size_chunks=args.attention_window_chunks,
             num_sink_tokens=4,
-            token_state_interaction="naive_gated_add",
+            token_state_interaction=args.token_state_interaction,
+            state_summary_dim=args.state_summary_dim,
+            use_state_delta=args.use_state_delta,
+            state_conditioning_scale_init=args.state_conditioning_scale_init,
+            state_aware_output_mode=args.state_aware_output_mode,
+            content_memory_enabled=args.content_memory_enabled,
+            content_memory_slots=args.content_memory_slots,
+            content_memory_use_state_delta=args.content_memory_use_state_delta,
+            content_memory_write_gate_context=args.content_memory_write_gate_context,
+            content_memory_decoder_init_scale=args.content_memory_decoder_init_scale,
+            content_memory_write_gate_init_scale=args.content_memory_write_gate_init_scale,
+            content_memory_write_gate_bias_init=args.content_memory_write_gate_bias_init,
+            content_memory_read_scale_init=args.content_memory_read_scale_init,
             ff_size=args.minimal_ff_size,
         ),
     )
@@ -1393,9 +1449,21 @@ def main() -> int:
     if args.train_scope == "denoiser":
         for parameter in raw.parameters():
             parameter.requires_grad_(True)
-    else:
+    elif args.train_scope == "mixer":
         for parameter in list(raw.root_model.parameters()) + list(raw.body_model.parameters()):
             parameter.requires_grad_(True)
+    else:
+        for name, parameter in raw.named_parameters():
+            parameter.requires_grad_(
+                any(
+                    marker in name
+                    for marker in (
+                        ".state_projector.",
+                        ".token_state_interaction.",
+                        ".content_memory.",
+                    )
+                )
+            )
     trainable = [parameter for parameter in raw.parameters() if parameter.requires_grad]
     raw.root_model.train()
     raw.body_model.train()
@@ -1616,6 +1684,12 @@ def main() -> int:
         "differentiable_rollout_steps": differentiable_rollout_steps,
         "differentiable_rollout_probability": args.differentiable_rollout_probability,
         "differentiable_rollout_windows": args.differentiable_rollout_windows,
+        "train_scope": args.train_scope,
+        "token_state_interaction": args.token_state_interaction,
+        "state_aware_output_mode": args.state_aware_output_mode,
+        "content_memory_enabled": args.content_memory_enabled,
+        "content_memory_slots": args.content_memory_slots,
+        "content_memory_write_gate_context": args.content_memory_write_gate_context,
     }
     checkpoint = {
         "mode": args.mode,

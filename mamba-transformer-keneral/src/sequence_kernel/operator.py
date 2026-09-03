@@ -103,6 +103,7 @@ class SequenceKernel(nn.Module):
         self._mamba_wrapper = mamba_wrapper
         self._mamba_reset_fn = mamba_reset_fn
         self.runtime_mamba_output_scale = 1.0
+        self.last_content_memory_diagnostics: dict[str, float | bool | str | None] = {}
         if config.interaction == "naive_gated_add":
             self.fusion_gate_logit = nn.Parameter(
                 torch.tensor(float(config.fusion_gate_logit_init))
@@ -162,6 +163,11 @@ class SequenceKernel(nn.Module):
             )
             self.output_interaction = None
             self.delta_rule = None
+            self.fusion_gate_logit = (
+                nn.Parameter(torch.tensor(float(config.fusion_gate_logit_init)))
+                if config.state_aware_output_mode == "native_gated_add"
+                else None
+            )
 
         if config.content_memory_enabled:
             if not self.uses_token_state_interaction:
@@ -172,6 +178,11 @@ class SequenceKernel(nn.Module):
                 state_dim=config.state_summary_dim,
                 d_model=config.d_model,
                 slots=config.content_memory_slots,
+                write_gate_context=config.content_memory_write_gate_context,
+                decoder_init_scale=config.content_memory_decoder_init_scale,
+                write_gate_init_scale=config.content_memory_write_gate_init_scale,
+                write_gate_bias_init=config.content_memory_write_gate_bias_init,
+                read_scale_init=config.content_memory_read_scale_init,
             )
 
     @property
@@ -239,7 +250,7 @@ class SequenceKernel(nn.Module):
             state_summary = self._project_state(mamba_state)
             state_delta = torch.zeros_like(state_summary)
         if self.content_memory is not None:
-            parameter = self._mamba_parameter()
+            parameter = self.content_memory.content_decoder.weight
             persistent_memory = self.content_memory.initial(
                 batch_size, device=parameter.device, dtype=parameter.dtype
             )
@@ -324,20 +335,18 @@ class SequenceKernel(nn.Module):
         history_chunk_scales = None
         interaction_aux = None
         memory_content = None
+        read_residual_scale = None
+        augmented_minus_base_norm = None
         memory_read_enabled = (
             self.config.content_memory_read_enabled
             if content_memory_read_enabled is None
             else content_memory_read_enabled
         )
         if self.content_memory is not None and do_read and memory_read_enabled:
-            candidate_memory_content = self.content_memory.read(
+            memory_content = self.content_memory.read(
                 state.persistent_memory, enabled=True
             ).to(x.dtype)
-            # A zero-initialized slot must not alter attention normalization by
-            # merely existing as an all-zero K/V token. Once a write creates
-            # content, the same fixed number of slots is exposed to attention.
-            if bool(torch.count_nonzero(candidate_memory_content)):
-                memory_content = candidate_memory_content
+            read_residual_scale = self.content_memory.read_residual_scale
         if enable_attention_path and self.uses_token_state_interaction:
             summary = state.state_summary
             delta = state.state_delta
@@ -372,8 +381,33 @@ class SequenceKernel(nn.Module):
                 current_mask=current_mask,
                 query_bias=query_bias,
                 history_chunk_scales=history_chunk_scales,
-                extra_content=memory_content,
+                extra_content=None,
             )
+            if memory_content is not None:
+                augmented_output, _, augmented_aux = self.attention.forward_chunk(
+                    x,
+                    cache=state.attention_cache,
+                    do_read=do_read,
+                    commit=False,
+                    current_mask=current_mask,
+                    query_bias=query_bias,
+                    history_chunk_scales=history_chunk_scales,
+                    extra_content=memory_content,
+                )
+                attention_difference = augmented_output - attention_output
+                attention_output = attention_output + (
+                    read_residual_scale.to(attention_difference.dtype)
+                    * attention_difference
+                )
+                augmented_minus_base_norm = (
+                    attention_difference.detach().float().norm(dim=-1).mean().item()
+                )
+                attention_aux = {
+                    **attention_aux,
+                    "augmented_backend_used": augmented_aux["backend_used"],
+                    "persistent_content_tokens_read": memory_content.shape[1],
+                    "augmented_minus_base_attention_norm": augmented_minus_base_norm,
+                }
 
         mamba_output = None
         next_mamba_state = None
@@ -399,6 +433,7 @@ class SequenceKernel(nn.Module):
             next_state_delta = next_state_summary - state.state_summary
 
         next_memory = None
+        content_pending = None
         if self.content_memory is not None:
             next_memory = state.persistent_memory
             if (
@@ -419,9 +454,10 @@ class SequenceKernel(nn.Module):
                     write_delta = torch.roll(next_state_delta, shifts=1, dims=0)
                 if not self.config.content_memory_use_state_delta:
                     write_delta = torch.zeros_like(write_delta)
-                next_memory = self.content_memory.propose(
+                content_pending = self.content_memory.propose(
                     next_state_summary, write_delta, state.persistent_memory
-                ).slots
+                )
+                next_memory = content_pending.slots
 
         if attention_output is not None and mamba_output is not None:
             if self.uses_output_interaction:
@@ -429,9 +465,18 @@ class SequenceKernel(nn.Module):
                     attention_output, mamba_output
                 )
             elif self.uses_token_state_interaction:
-                # Contribution-1 uses Mamba only to build the next durable
-                # address state. Content remains the attention value path.
-                output = attention_output
+                if self.config.state_aware_output_mode == "native_gated_add":
+                    gate = (
+                        torch.sigmoid(self.fusion_gate_logit)
+                        * float(self.runtime_mamba_output_scale)
+                    ).to(mamba_output.dtype)
+                    output = attention_output + (gate * mamba_output).to(
+                        attention_output.dtype
+                    )
+                else:
+                    # Historical C behavior: Mamba only builds durable address
+                    # state and does not directly contribute output values.
+                    output = attention_output
             elif self.uses_delta_rule:
                 output = attention_output + (
                     self.delta_rule.output_scale * mamba_output.float()
@@ -487,7 +532,7 @@ class SequenceKernel(nn.Module):
                     ).cpu()
                 )
                 if self.mode == "hybrid"
-                and self.config.interaction == "naive_gated_add"
+                and self.fusion_gate_logit is not None
                 else None
             ),
             "state_conditioning_scale": (
@@ -525,8 +570,60 @@ class SequenceKernel(nn.Module):
                 "uses_state_delta": self.config.content_memory_use_state_delta,
                 "slots": 0 if self.content_memory is None else self.config.content_memory_slots,
                 "read_norm": None if memory_content is None else memory_content.float().norm(dim=-1).mean().item(),
+                "read_residual_scale": (
+                    None
+                    if self.content_memory is None
+                    else float(self.content_memory.read_residual_scale.detach().cpu())
+                ),
+                "write_gate_context": (
+                    None
+                    if self.content_memory is None
+                    else self.content_memory.write_gate_context
+                ),
+                "memory_slot_norm": (
+                    None
+                    if state.persistent_memory is None
+                    else state.persistent_memory.detach().float().norm(dim=-1).mean().item()
+                ),
+                "memory_update_norm": (
+                    None
+                    if content_pending is None
+                    else content_pending.update.detach().float().norm(dim=-1).mean().item()
+                ),
+                "write_gate_mean": (
+                    None
+                    if content_pending is None
+                    else content_pending.write_gate.detach().float().mean().item()
+                ),
+                "write_gate_min": (
+                    None
+                    if content_pending is None
+                    else content_pending.write_gate.detach().float().min().item()
+                ),
+                "write_gate_max": (
+                    None
+                    if content_pending is None
+                    else content_pending.write_gate.detach().float().max().item()
+                ),
+                "state_summary_norm": (
+                    None
+                    if next_state_summary is None
+                    else next_state_summary.detach().float().norm(dim=-1).mean().item()
+                ),
+                "state_delta_norm": (
+                    None
+                    if next_state_delta is None
+                    else next_state_delta.detach().float().norm(dim=-1).mean().item()
+                ),
+                "content_proposal_norm": (
+                    None
+                    if content_pending is None
+                    else content_pending.proposal.detach().float().norm(dim=-1).mean().item()
+                ),
+                "augmented_minus_base_attention_norm": augmented_minus_base_norm,
             },
         }
+        self.last_content_memory_diagnostics = aux["persistent_content_memory"]
         return output, pending, aux
 
     def commit(
