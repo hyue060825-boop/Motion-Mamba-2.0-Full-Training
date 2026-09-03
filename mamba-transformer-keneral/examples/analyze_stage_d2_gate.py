@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import math
+import subprocess
 import sys
 from pathlib import Path
 
@@ -162,6 +163,13 @@ def main() -> int:
         )
     )
     evaluation_manifest = _json(eval_root / "evaluation_manifest.json")
+    analysis_provenance = {
+        "git_sha": subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=REPO, text=True
+        ).strip(),
+        "source": str(Path(__file__).resolve()),
+        "source_sha256": _sha(Path(__file__).resolve()),
+    }
     learned = _json(REPO / "docs/D2_LEARNED_CAUSAL_MEMORY_RESULTS.json")
     parity = _json(
         Path("/data4/zts/result/stage_d2_step0_native_parity_20260903/results.json")
@@ -385,14 +393,21 @@ def main() -> int:
 
     causal_output = {
         "schema_version": "d2_causal_intervention_v1",
-        "status": "PASS" if causal_worse and permutation_contract_pass else "FAIL",
+        "stage": args.stage,
+        "status": (
+            "PASS"
+            if read_write_causal and trajectory_causal and permutation_contract_pass
+            else "FAIL"
+        ),
         "checkpoint": evaluation_manifest["checkpoints"]["d2_full"],
         "checkpoint_sha256": evaluation_manifest["checkpoint_sha256"]["d2_full"],
         "protocol": evaluation_manifest,
+        "analysis_provenance": analysis_provenance,
         "normal_per_sample": str((full_40 / "per_sample.jsonl").resolve()),
         "comparisons": interventions,
         "permutation_audit": permutation_audit,
-        "content_write_or_read_causality_established": causal_worse,
+        "content_write_or_read_mean_degradation_observed": causal_worse,
+        "content_write_or_read_causality_established": read_write_causal,
         "trajectory_specific_behavioral_causality_established": trajectory_causal,
         "content_write_or_read_causality_with_ci_established": read_write_causal,
         "delta_state_independent_contribution_established": delta_established,
@@ -409,6 +424,7 @@ def main() -> int:
             else "STOP"
         ),
         "protocol": evaluation_manifest,
+        "analysis_provenance": analysis_provenance,
         "locked_final_actors_read": False,
         "training": training,
         "aggregate_results": aggregate,
