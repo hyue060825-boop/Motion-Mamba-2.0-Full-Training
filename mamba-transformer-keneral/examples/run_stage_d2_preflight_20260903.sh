@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT=/data3/zts/MotionMamba2.0/mamba-transformer-keneral
 PY=/data3/zts/conda_envs/ardy_env/bin/python
-OUT=/data4/zts/result/stage_d2_learned_causal_memory_20260903
+OUT=/data4/zts/result/stage_d2_learned_causal_memory_v2_20260903
 GPU=${D2_PREFLIGHT_GPU:-0}
 
 export PYTHONPATH=$ROOT/src:/data3/zts/packages/state-spaces-mamba:/data3/zts/packages/mamba_op_triton${PYTHONPATH:+:$PYTHONPATH}

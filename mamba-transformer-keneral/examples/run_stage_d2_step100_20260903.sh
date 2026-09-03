@@ -9,7 +9,7 @@ TRAIN=$BASE/bones_seed_ardy_train/manifest.jsonl
 VAL=$BASE/bones_seed_ardy_val/manifest.jsonl
 STATS=$BASE/bones_seed_ardy_train
 TEXT=$BASE/bones_seed_text_cache_llm2vec
-LEARNED=$BASE/stage_d2_learned_causal_memory_20260903/results.json
+LEARNED=$BASE/stage_d2_learned_causal_memory_v2_20260903/results.json
 PARITY=$BASE/stage_d2_step0_native_parity_20260903/results.json
 
 export HF_HOME=/data3/zts/cache/huggingface

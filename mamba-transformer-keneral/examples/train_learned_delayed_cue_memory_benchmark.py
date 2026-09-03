@@ -163,7 +163,7 @@ class DelayedCueModel(nn.Module):
             memory_norms.append(
                 float(state.persistent_memory.detach().float().norm(dim=-1).mean())
             )
-            if intervention == "permute_memory_after_W4" and window >= 3:
+            if intervention == "permute_memory_after_W4" and window == 3:
                 permutation = torch.roll(
                     torch.arange(tokens.shape[0], device=tokens.device), shifts=1
                 )
