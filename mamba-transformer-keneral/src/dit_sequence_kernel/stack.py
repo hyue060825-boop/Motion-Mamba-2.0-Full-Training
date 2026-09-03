@@ -81,6 +81,7 @@ class DiTSequenceStack(nn.Module):
         content_memory_read_enabled: bool | None = None,
         content_memory_write_enabled: bool = True,
         content_memory_delta_mode: str = "normal",
+        content_memory_condition: torch.Tensor | None = None,
     ):
         self._validate_state(state)
         pending_layers = []
@@ -99,6 +100,7 @@ class DiTSequenceStack(nn.Module):
                 content_memory_read_enabled=content_memory_read_enabled,
                 content_memory_write_enabled=content_memory_write_enabled,
                 content_memory_delta_mode=content_memory_delta_mode,
+                content_memory_condition=content_memory_condition,
             )
             pending_layers.append(pending)
             layer_aux.append(aux)

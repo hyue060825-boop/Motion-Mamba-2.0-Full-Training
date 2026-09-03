@@ -184,3 +184,22 @@ The allowed conclusion is:
 The stronger claim that carried Mamba state was decoded into
 trajectory-specific content that causally improves motion after W4 eviction is
 not supported by the final intervention gate.
+
+## D2R Remediation Addendum (2026-09-03)
+
+The report above is the immutable result of the original D2 experiment. A new
+D2R experiment restarted from the healthy Native Hybrid 50k parent and fixed
+the identified supervision, detachment, conditioning, write-retention, and
+scale problems. It did not resume or overwrite the original D2 checkpoint.
+
+D2R materially changes the mechanism conclusion: at step 250, write-off,
+readout-off, and post-W4 memory permutation all significantly worsen BONES 40s
+post-W5 AUC, so trajectory-specific persistent-memory use is now established
+on the selection panel. Delta itself is not established: D2R-full is not
+better than no-delta, permute-delta is null, and zero-delta significantly
+improves both primary AUCs. Absolute Root/Constraint slopes remain positive,
+so the final decision is still `STOP` and Stage E was not authorized.
+
+The superseding remediation analysis is in `docs/D2R_FINAL_SUMMARY.md`; raw
+and structured D2R artifacts use the `stage_d2r_*` and `D2R_*` names so the two
+experimental histories cannot be confused.

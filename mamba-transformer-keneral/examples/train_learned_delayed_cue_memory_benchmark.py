@@ -44,6 +44,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--state-summary-dim", type=int, default=16)
     parser.add_argument("--memory-slots", type=int, default=2)
     parser.add_argument("--chunk-tokens", type=int, default=16)
+    parser.add_argument("--contextual", action="store_true")
     return parser.parse_args()
 
 
@@ -69,6 +70,7 @@ class DelayedCueModel(nn.Module):
         state_summary_dim: int,
         memory_slots: int,
         device: torch.device,
+        contextual: bool = False,
     ) -> None:
         super().__init__()
         from mamba_ssm.modules.mamba3 import Mamba3
@@ -110,9 +112,14 @@ class DelayedCueModel(nn.Module):
             content_memory_write_gate_init_scale=0.02,
             content_memory_write_gate_bias_init=0.0,
             content_memory_read_scale_init=0.0,
+            content_memory_conditioning=("text" if contextual else "none"),
+            content_memory_normalize_delta=contextual,
+            content_memory_normalize_slots=contextual,
+            content_memory_max_write_rate=(0.25 if contextual else 1.0),
         )
         self.kernel = SequenceKernel(config, mamba3=mamba)
         self.classifier = nn.Linear(d_model, 2)
+        self.contextual = contextual
         self.to(device=device)
         # The mechanism benchmark isolates content read/write. Mamba remains
         # trainable as the state source, but neither its direct output nor the
@@ -127,6 +134,7 @@ class DelayedCueModel(nn.Module):
         tokens: torch.Tensor,
         *,
         intervention: str = "correct",
+        condition: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, dict]:
         if tokens.ndim != 4 or tokens.shape[1] != 8:
             raise ValueError("delayed-cue task requires [B,W1-W8,T,D]")
@@ -139,9 +147,12 @@ class DelayedCueModel(nn.Module):
             "permute_memory_after_W4",
             "direct_mamba_readout_off_after_W4",
             "state_address_off_after_W4",
+            "permute_context_at_W1",
         }:
             raise ValueError(f"unknown intervention: {intervention}")
         state = self.kernel.init_state(batch_size=tokens.shape[0])
+        if self.contextual and condition is None:
+            raise ValueError("contextual delayed-cue task requires condition")
         attention_chunks = []
         memory_norms = []
         for window in range(7):
@@ -157,6 +168,11 @@ class DelayedCueModel(nn.Module):
                     window == 0 and intervention != "write_off_at_W1"
                 ),
                 content_memory_delta_mode=delta_mode,
+                content_memory_condition=(
+                    torch.roll(condition, shifts=2, dims=0)
+                    if window == 0 and intervention == "permute_context_at_W1"
+                    else condition
+                ),
             )
             self.kernel.commit(state, pending, chunk_id=window, detach=False)
             attention_chunks.append(state.attention_cache.num_chunks)
@@ -165,7 +181,8 @@ class DelayedCueModel(nn.Module):
             )
             if intervention == "permute_memory_after_W4" and window == 3:
                 permutation = torch.roll(
-                    torch.arange(tokens.shape[0], device=tokens.device), shifts=1
+                    torch.arange(tokens.shape[0], device=tokens.device),
+                    shifts=(2 if self.contextual else 1),
                 )
                 state.persistent_memory = self.kernel.content_memory.permute_rows(
                     state.persistent_memory, permutation
@@ -176,6 +193,7 @@ class DelayedCueModel(nn.Module):
             state=state,
             content_memory_read_enabled=read_enabled,
             content_memory_write_enabled=False,
+            content_memory_condition=condition,
         )
         return self.classifier(output.float().mean(dim=1)), {
             "attention_cache_chunks": attention_chunks,
@@ -221,12 +239,16 @@ def _make_batch(
     *,
     device: torch.device,
     generator: torch.Generator,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    if batch_size % 2:
-        raise ValueError("batch size must be even for paired cue interventions")
-    labels = torch.arange(batch_size, device=device) % 2
+    contextual: bool = False,
+) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor]:
+    divisor = 4 if contextual else 2
+    if batch_size % divisor:
+        raise ValueError(f"batch size must be divisible by {divisor}")
+    cue_labels = torch.arange(batch_size, device=device) % 2
+    context_labels = (torch.arange(batch_size, device=device) // 2) % 2
+    labels = cue_labels ^ context_labels if contextual else cue_labels
     tokens = torch.zeros(batch_size, 8, chunk_tokens, d_model, device=device)
-    cue = labels.float().mul(2.0).sub(1.0)
+    cue = cue_labels.float().mul(2.0).sub(1.0)
     tokens[:, 0, :, 0] = cue[:, None]
     tokens[:, 0, :, 1] = 1.0
     distractors = torch.randn(
@@ -242,7 +264,12 @@ def _make_batch(
         1, 7, device=device
     )[None, :, None].float()
     tokens[:, 7, :, -1] = 1.0
-    return tokens, labels
+    condition = None
+    if contextual:
+        condition = torch.zeros(batch_size, d_model, device=device)
+        condition[:, 0] = context_labels.float().mul(2.0).sub(1.0)
+        condition[:, 1] = 1.0
+    return tokens, condition, labels
 
 
 def _grad_norm(parameters) -> float:
@@ -267,6 +294,7 @@ def _train(
     log_every: int,
     log_path: Path,
     is_memory_model: bool,
+    contextual: bool = False,
 ) -> dict:
     parameters = [parameter for parameter in model.parameters() if parameter.requires_grad]
     optimizer = torch.optim.AdamW(parameters, lr=learning_rate, weight_decay=0.0)
@@ -300,15 +328,20 @@ def _train(
     last_audit = {}
     model.train()
     for step in range(1, steps + 1):
-        tokens, labels = _make_batch(
+        tokens, condition, labels = _make_batch(
             batch_size,
             d_model,
             chunk_tokens,
             device=device,
             generator=generator,
+            contextual=contextual,
         )
         optimizer.zero_grad(set_to_none=True)
-        logits, audit = model(tokens)
+        logits, audit = (
+            model(tokens, condition=condition)
+            if is_memory_model
+            else model(tokens)
+        )
         loss = F.cross_entropy(logits, labels)
         if not torch.isfinite(loss):
             raise RuntimeError(f"non-finite benchmark loss at step {step}")
@@ -356,12 +389,18 @@ def _evaluate(
     labels: torch.Tensor,
     *,
     intervention: str | None = None,
+    condition: torch.Tensor | None = None,
 ) -> dict:
     model.eval()
     if intervention is None:
-        logits, audit = model(tokens)
+        if condition is None:
+            logits, audit = model(tokens)
+        else:
+            logits, audit = model(tokens, condition=condition)
     else:
-        logits, audit = model(tokens, intervention=intervention)
+        logits, audit = model(
+            tokens, intervention=intervention, condition=condition
+        )
     probabilities = logits.float().softmax(dim=-1)
     predictions = probabilities.argmax(dim=-1)
     return {
@@ -377,8 +416,9 @@ def main() -> int:
     args = parse_args()
     if args.steps <= 0 or args.batch_size <= 0 or args.eval_samples <= 0:
         raise ValueError("steps, batch size, and eval samples must be positive")
-    if args.batch_size % 2 or args.eval_samples % 2:
-        raise ValueError("batch size and eval samples must be even")
+    divisor = 4 if args.contextual else 2
+    if args.batch_size % divisor or args.eval_samples % divisor:
+        raise ValueError(f"batch size and eval samples must be divisible by {divisor}")
     torch.manual_seed(args.seed)
     device = torch.device(args.device)
     torch.cuda.set_device(device)
@@ -392,7 +432,11 @@ def main() -> int:
         "torch": torch.__version__,
         "cuda": torch.version.cuda,
         "gpu": torch.cuda.get_device_name(device),
-        "task": "W1 binary cue; W2-W7 matched distractors; W8 cue classification",
+        "task": (
+            "W1 cue XOR semantic context; W2-W7 distractors; W8 classification"
+            if args.contextual
+            else "W1 binary cue; W2-W7 matched distractors; W8 cue classification"
+        ),
         "isolation": {
             "write_windows": [1],
             "direct_mamba_readout_scale": 0.0,
@@ -407,6 +451,7 @@ def main() -> int:
         state_summary_dim=args.state_summary_dim,
         memory_slots=args.memory_slots,
         device=device,
+        contextual=args.contextual,
     )
     memory_training = _train(
         memory_model,
@@ -420,6 +465,7 @@ def main() -> int:
         log_every=args.log_every,
         log_path=output / "memory_train.jsonl",
         is_memory_model=True,
+        contextual=args.contextual,
     )
     torch.save(memory_model.state_dict(), output / "learned_memory_model.pt")
 
@@ -436,16 +482,18 @@ def main() -> int:
         log_every=args.log_every,
         log_path=output / "minimal_train.jsonl",
         is_memory_model=False,
+        contextual=args.contextual,
     )
     torch.save(minimal.state_dict(), output / "minimal_w4_model.pt")
 
     eval_generator = torch.Generator(device=device).manual_seed(args.seed + 1000)
-    tokens, labels = _make_batch(
+    tokens, condition, labels = _make_batch(
         args.eval_samples,
         args.d_model,
         args.chunk_tokens,
         device=device,
         generator=eval_generator,
+        contextual=args.contextual,
     )
     interventions = (
         "correct",
@@ -456,9 +504,15 @@ def main() -> int:
         "permute_memory_after_W4",
         "direct_mamba_readout_off_after_W4",
         "state_address_off_after_W4",
-    )
+    ) + (("permute_context_at_W1",) if args.contextual else ())
     evaluations = {
-        name: _evaluate(memory_model, tokens, labels, intervention=name)
+        name: _evaluate(
+            memory_model,
+            tokens,
+            labels,
+            intervention=name,
+            condition=condition,
+        )
         for name in interventions
     }
     evaluations["minimal_W4_control"] = _evaluate(minimal, tokens, labels)
@@ -486,6 +540,12 @@ def main() -> int:
         ),
         "fixed_memory_capacity": args.memory_slots == 2,
     }
+    if args.contextual:
+        gate["context_permutation_drop_at_least_0_25"] = (
+            correct_accuracy
+            - evaluations["permute_context_at_W1"]["accuracy"]
+            >= 0.25
+        )
     gate["status"] = "PASS" if all(gate.values()) else "FAIL"
     result = {
         "schema_version": "d2_learned_causal_memory_v1",

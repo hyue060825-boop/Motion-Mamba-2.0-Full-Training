@@ -30,6 +30,55 @@ def test_content_memory_readout_off_is_exact_zero():
     assert torch.equal(module.read(slots, enabled=False), torch.zeros_like(slots))
 
 
+def test_text_conditioned_delta_changes_proposal_and_bounds_writes():
+    torch.manual_seed(11)
+    module = PersistentContentMemory(
+        state_dim=4,
+        d_model=8,
+        slots=2,
+        condition_dim=8,
+        normalize_delta=True,
+        normalize_slots=True,
+        max_write_rate=0.25,
+    )
+    summary = torch.randn(2, 4)
+    delta = torch.randn(2, 4) * 1e-3
+    previous = torch.zeros(2, 2, 8)
+    condition_a = torch.randn(2, 8)
+    condition_b = -condition_a
+    pending_a = module.propose(summary, delta, previous, condition_a)
+    pending_b = module.propose(summary, delta, previous, condition_b)
+    assert not torch.equal(pending_a.proposal, pending_b.proposal)
+    assert float(pending_a.write_gate.max()) <= 0.25
+    proposal_norm = float(pending_a.proposal.float().norm(dim=-1).mean())
+    assert 0.0 < proposal_norm <= 8**0.5 + 1e-5
+
+
+def test_text_film_changes_interpretation_of_same_delta():
+    module = PersistentContentMemory(
+        state_dim=2, d_model=4, slots=1, condition_dim=4,
+        normalize_delta=True,
+    )
+    with torch.no_grad():
+        module.condition_projector.weight.zero_()
+        module.condition_projector.weight[0, 0] = 1.0
+        module.condition_projector.weight[1, 1] = 1.0
+        module.delta_conditioner.weight.copy_(
+            torch.tensor([[0.3, -0.2], [-0.1, 0.4], [0.2, 0.1], [-0.3, 0.2]])
+        )
+        module.content_decoder.weight.fill_(0.1)
+    summary = torch.tensor([[1.0, -1.0]])
+    delta = torch.tensor([[0.1, -0.1]])
+    previous = torch.zeros(1, 1, 4)
+    left = module.propose(
+        summary, delta, previous, torch.tensor([[1.0, 0.0, 0.0, 0.0]])
+    )
+    turn = module.propose(
+        summary, delta, previous, torch.tensor([[0.0, 1.0, 0.0, 0.0]])
+    )
+    assert not torch.equal(left.proposal, turn.proposal)
+
+
 class _FakeMamba(nn.Module):
     def __init__(self, d_model: int) -> None:
         super().__init__()

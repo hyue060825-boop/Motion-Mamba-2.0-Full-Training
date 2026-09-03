@@ -183,6 +183,14 @@ class SequenceKernel(nn.Module):
                 write_gate_init_scale=config.content_memory_write_gate_init_scale,
                 write_gate_bias_init=config.content_memory_write_gate_bias_init,
                 read_scale_init=config.content_memory_read_scale_init,
+                condition_dim=(
+                    config.d_model
+                    if config.content_memory_conditioning == "text"
+                    else None
+                ),
+                normalize_delta=config.content_memory_normalize_delta,
+                normalize_slots=config.content_memory_normalize_slots,
+                max_write_rate=config.content_memory_max_write_rate,
             )
 
     @property
@@ -295,6 +303,7 @@ class SequenceKernel(nn.Module):
         content_memory_write_enabled: bool = True,
         content_memory_delta: Optional[torch.Tensor] = None,
         content_memory_delta_mode: str = "normal",
+        content_memory_condition: Optional[torch.Tensor] = None,
     ) -> tuple[torch.Tensor, PendingSequenceKernelState, dict]:
         """Evaluate selected paths and return their uncommitted next memory."""
         if x.ndim != 3:
@@ -455,7 +464,10 @@ class SequenceKernel(nn.Module):
                 if not self.config.content_memory_use_state_delta:
                     write_delta = torch.zeros_like(write_delta)
                 content_pending = self.content_memory.propose(
-                    next_state_summary, write_delta, state.persistent_memory
+                    next_state_summary,
+                    write_delta,
+                    state.persistent_memory,
+                    condition=content_memory_condition,
                 )
                 next_memory = content_pending.slots
 
@@ -580,6 +592,10 @@ class SequenceKernel(nn.Module):
                     if self.content_memory is None
                     else self.content_memory.write_gate_context
                 ),
+                "conditioning": self.config.content_memory_conditioning,
+                "normalize_delta": self.config.content_memory_normalize_delta,
+                "normalize_slots": self.config.content_memory_normalize_slots,
+                "max_write_rate": self.config.content_memory_max_write_rate,
                 "memory_slot_norm": (
                     None
                     if state.persistent_memory is None

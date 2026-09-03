@@ -48,6 +48,20 @@ def add_sequence_checkpoint_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--content-memory-write-gate-init-scale", type=float, default=None)
     parser.add_argument("--content-memory-write-gate-bias-init", type=float, default=None)
     parser.add_argument("--content-memory-read-scale-init", type=float, default=None)
+    parser.add_argument(
+        "--content-memory-conditioning", choices=["none", "text"], default=None
+    )
+    parser.add_argument(
+        "--content-memory-normalize-delta",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+    )
+    parser.add_argument(
+        "--content-memory-normalize-slots",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+    )
+    parser.add_argument("--content-memory-max-write-rate", type=float, default=None)
 
 
 def _metadata(checkpoint: dict[str, Any]) -> dict[str, Any]:
@@ -84,11 +98,15 @@ def sequence_config_kwargs(
         "content_memory_write_gate_init_scale": 0.02,
         "content_memory_write_gate_bias_init": 0.0,
         "content_memory_read_scale_init": 0.0,
+        "content_memory_conditioning": "none",
+        "content_memory_normalize_delta": False,
+        "content_memory_normalize_slots": False,
+        "content_memory_max_write_rate": 1.0,
     }
     resolved = {}
     sources = {}
     for key, default in defaults.items():
-        override = getattr(args, key)
+        override = getattr(args, key, None)
         if override is not None:
             value, source = override, "cli"
         elif key in metadata:

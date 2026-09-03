@@ -46,6 +46,10 @@ class ArdySequenceKernelConfig:
     content_memory_write_gate_init_scale: float = 0.02
     content_memory_write_gate_bias_init: float = 0.0
     content_memory_read_scale_init: float = 0.0
+    content_memory_conditioning: Literal["none", "text"] = "none"
+    content_memory_normalize_delta: bool = False
+    content_memory_normalize_slots: bool = False
+    content_memory_max_write_rate: float = 1.0
     ff_size: int | None = None
 
     def __post_init__(self) -> None:
@@ -76,6 +80,10 @@ class ArdySequenceKernelConfig:
             or self.content_memory_write_gate_init_scale <= 0
         ):
             raise ValueError("content-memory initialization scales must be positive")
+        if self.content_memory_conditioning not in {"none", "text"}:
+            raise ValueError("invalid content-memory conditioning")
+        if not 0.0 < self.content_memory_max_write_rate <= 1.0:
+            raise ValueError("content-memory max write rate must be in (0, 1]")
 
 
 def _copy_compatible_frontend(source: nn.Module, target: nn.Module) -> None:
@@ -168,6 +176,10 @@ def install_ardy_sequence_kernel(
         "content_memory_write_gate_init_scale": config.content_memory_write_gate_init_scale,
         "content_memory_write_gate_bias_init": config.content_memory_write_gate_bias_init,
         "content_memory_read_scale_init": config.content_memory_read_scale_init,
+        "content_memory_conditioning": config.content_memory_conditioning,
+        "content_memory_normalize_delta": config.content_memory_normalize_delta,
+        "content_memory_normalize_slots": config.content_memory_normalize_slots,
+        "content_memory_max_write_rate": config.content_memory_max_write_rate,
     }
     root_kwargs = _block_kwargs(raw, old_root)
     body_kwargs = _block_kwargs(raw, old_body)

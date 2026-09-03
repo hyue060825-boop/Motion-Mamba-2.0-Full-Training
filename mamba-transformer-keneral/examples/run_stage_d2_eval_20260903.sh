@@ -5,6 +5,22 @@ ROOT=/data3/zts/MotionMamba2.0/mamba-transformer-keneral
 PY=/data3/zts/conda_envs/ardy_env/bin/python
 BASE=/data4/zts/result
 D2_STAGE=${D2_STAGE:-100}
+D2_FAMILY=${D2_FAMILY:-d2}
+if [[ $D2_FAMILY == d2r ]]; then
+  case "$D2_STAGE" in
+    100)
+      OUT=$BASE/stage_d2r_bones_step100_selection_eval_20260903
+      FULL=$BASE/stage_d2r_bones_step100_full_v2_20260903/hybrid_humanml3d_ddp.pt
+      NO_DELTA=$BASE/stage_d2r_bones_step100_no_delta_v2_20260903/hybrid_humanml3d_ddp.pt
+      ;;
+    250)
+      OUT=$BASE/stage_d2r_bones_step250_selection_eval_20260903
+      FULL=$BASE/stage_d2r_bones_step250_full_20260903/hybrid_humanml3d_ddp.pt
+      NO_DELTA=$BASE/stage_d2r_bones_step250_no_delta_20260903/hybrid_humanml3d_ddp.pt
+      ;;
+    *) echo "D2R stage must be 100 or 250" >&2; exit 2 ;;
+  esac
+else
 case "$D2_STAGE" in
   100)
     OUT=$BASE/stage_d2_bones_selection_eval_20260903
@@ -21,6 +37,7 @@ case "$D2_STAGE" in
     exit 2
     ;;
 esac
+fi
 PANELS=$BASE/bones_seed_long_memory_panel_v2_20260831/selection
 LOCK=$ROOT/configs/bones_seed_long_memory_protocol_v2.json
 MANIFEST=$BASE/bones_seed_ardy_val/manifest.jsonl
@@ -148,7 +165,7 @@ run_wave \
   2 'run_long 2 minimal_w4 20 in_horizon' \
   3 'run_long 3 minimal_w4 40 in_horizon'
 
-"$PY" - "$OUT" "$ROOT" "$FULL" "$NO_DELTA" "$MANIFEST" "$PANELS" "$D2_STAGE" <<'PY'
+"$PY" - "$OUT" "$ROOT" "$FULL" "$NO_DELTA" "$MANIFEST" "$PANELS" "$D2_STAGE" "$D2_FAMILY" <<'PY'
 import hashlib
 import json
 import platform
@@ -160,12 +177,14 @@ import torch
 
 out, root, full, no_delta, manifest, panels = map(Path, sys.argv[1:7])
 stage = int(sys.argv[7])
+family = sys.argv[8]
 sha = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
 native = Path("/data4/zts/result/bones_seed_contract_full50k_20260824_hybrid/hybrid_humanml3d_ddp.pt")
 minimal = Path("/data4/zts/result/bones_seed_contract_full50k_20260824_minimal/minimal_humanml3d_ddp.pt")
 record = {
     "status": "COMPLETE",
     "stage": stage,
+    "family": family,
     "git_sha": subprocess.check_output(
         ["git", "rev-parse", "HEAD"], cwd=root, text=True
     ).strip(),

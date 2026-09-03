@@ -39,6 +39,10 @@ class SequenceKernelConfig:
     content_memory_write_gate_init_scale: float = 0.02
     content_memory_write_gate_bias_init: float = 0.0
     content_memory_read_scale_init: float = 0.0
+    content_memory_conditioning: Literal["none", "text"] = "none"
+    content_memory_normalize_delta: bool = False
+    content_memory_normalize_slots: bool = False
+    content_memory_max_write_rate: float = 1.0
 
     def __post_init__(self) -> None:
         if self.mode not in {"minimal", "hybrid"}:
@@ -84,6 +88,10 @@ class SequenceKernelConfig:
             or self.content_memory_write_gate_init_scale <= 0
         ):
             raise ValueError("content-memory initialization scales must be positive")
+        if self.content_memory_conditioning not in {"none", "text"}:
+            raise ValueError("invalid content-memory conditioning")
+        if not 0.0 < self.content_memory_max_write_rate <= 1.0:
+            raise ValueError("content-memory max write rate must be in (0, 1]")
 
     @property
     def d_model(self) -> int:

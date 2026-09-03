@@ -92,6 +92,10 @@ class ArdyDiTSequenceBlock(nn.Module):
         content_memory_write_gate_init_scale: float = 0.02,
         content_memory_write_gate_bias_init: float = 0.0,
         content_memory_read_scale_init: float = 0.0,
+        content_memory_conditioning: Literal["none", "text"] = "none",
+        content_memory_normalize_delta: bool = False,
+        content_memory_normalize_slots: bool = False,
+        content_memory_max_write_rate: float = 1.0,
         mamba_factory: Optional[MambaFactory] = None,
         device=None,
         **_ignored,
@@ -175,6 +179,10 @@ class ArdyDiTSequenceBlock(nn.Module):
                 content_memory_write_gate_init_scale=content_memory_write_gate_init_scale,
                 content_memory_write_gate_bias_init=content_memory_write_gate_bias_init,
                 content_memory_read_scale_init=content_memory_read_scale_init,
+                content_memory_conditioning=content_memory_conditioning,
+                content_memory_normalize_delta=content_memory_normalize_delta,
+                content_memory_normalize_slots=content_memory_normalize_slots,
+                content_memory_max_write_rate=content_memory_max_write_rate,
             )
             if kernel_mode == "minimal":
                 return SequenceKernel(config)
@@ -329,7 +337,7 @@ class ArdyDiTSequenceBlock(nn.Module):
         timesteps: Tensor,
         first_heading_angle: Optional[Tensor],
         token_index: Optional[Tensor],
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         batch_size = x.shape[0]
         motion = self.input_linear(x)
         if self.num_text_tokens is not None:
@@ -354,6 +362,12 @@ class ArdyDiTSequenceBlock(nn.Module):
             )
             condition = condition + self.linear_first_heading_angle(heading)
         condition = self.condition_norm(condition)
+        # Persistent writes receive prompt semantics explicitly. This excludes
+        # diffusion timestep and heading so identical state transitions can be
+        # interpreted differently under different text without noisy-step data.
+        memory_condition = torch.nn.functional.layer_norm(
+            pooled_text.float(), (self.latent_dim,)
+        ).to(motion.dtype)
 
         if self.positional_encoding_mode == "default":
             motion = self.sequence_pos_encoder(motion)
@@ -363,7 +377,7 @@ class ArdyDiTSequenceBlock(nn.Module):
             motion = self.motion_token_embedding(motion, token_index)
         valid = x_pad_mask.to(device=motion.device, dtype=torch.bool)
         motion = motion * valid[:, :, None].to(motion.dtype)
-        return motion, condition, valid
+        return motion, condition, valid, memory_condition
 
     @staticmethod
     def _select_equal_count(
@@ -387,7 +401,7 @@ class ArdyDiTSequenceBlock(nn.Module):
         first_heading_angle: Optional[Tensor] = None,
         token_index: Optional[Tensor] = None,
     ) -> Tensor:
-        motion, condition, valid = self._encode(
+        motion, condition, valid, memory_condition = self._encode(
             x,
             x_pad_mask,
             text_feat,
@@ -399,6 +413,9 @@ class ArdyDiTSequenceBlock(nn.Module):
         parameter = self._stack_parameter()
         motion = motion.to(device=parameter.device, dtype=parameter.dtype)
         condition = condition.to(device=parameter.device, dtype=parameter.dtype)
+        memory_condition = memory_condition.to(
+            device=parameter.device, dtype=parameter.dtype
+        )
         valid = valid.to(parameter.device)
         if self._sequence_state is None:
             state = self._ensure_state(x.shape[0])
@@ -433,6 +450,7 @@ class ArdyDiTSequenceBlock(nn.Module):
                 content_memory_read_enabled=self.content_memory_read_enabled_runtime,
                 content_memory_write_enabled=self.content_memory_write_enabled_runtime,
                 content_memory_delta_mode=self.content_memory_delta_mode_runtime,
+                content_memory_condition=memory_condition[start:stop],
             )
             hidden_parts.append(part_hidden)
         hidden = torch.cat(hidden_parts, dim=0)
@@ -460,6 +478,7 @@ class ArdyDiTSequenceBlock(nn.Module):
                 content_memory_read_enabled=self.content_memory_read_enabled_runtime,
                 content_memory_write_enabled=self.content_memory_write_enabled_runtime,
                 content_memory_delta_mode=self.content_memory_delta_mode_runtime,
+                content_memory_condition=memory_condition,
             )
             self.accepted_commits += 1
             self._accepted_commit = None

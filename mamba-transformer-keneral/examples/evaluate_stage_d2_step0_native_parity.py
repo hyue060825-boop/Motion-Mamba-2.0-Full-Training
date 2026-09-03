@@ -47,6 +47,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=9032026)
     parser.add_argument("--sample-index", type=int, default=0)
     parser.add_argument("--model", default="g1")
+    parser.add_argument("--remediation", action="store_true")
     return parser.parse_args()
 
 
@@ -262,6 +263,14 @@ def main() -> int:
                 content_memory_write_gate_init_scale=0.02,
                 content_memory_write_gate_bias_init=0.0,
                 content_memory_read_scale_init=0.0,
+                content_memory_conditioning=(
+                    "text" if d2 and args.remediation else "none"
+                ),
+                content_memory_normalize_delta=bool(d2 and args.remediation),
+                content_memory_normalize_slots=bool(d2 and args.remediation),
+                content_memory_max_write_rate=(
+                    0.25 if d2 and args.remediation else 1.0
+                ),
             ),
         )
         _load_denoiser_weights(model.denoiser.model, checkpoint)
@@ -389,7 +398,11 @@ def main() -> int:
     output = Path(args.output_dir)
     output.mkdir(parents=True, exist_ok=True)
     result = {
-        "schema_version": "d2_step0_native_parity_v1",
+        "schema_version": (
+            "d2_remediation_step0_native_parity_v1"
+            if args.remediation
+            else "d2_step0_native_parity_v1"
+        ),
         "git_sha": _git_sha(),
         "parent_checkpoint": str(checkpoint_path.resolve()),
         "parent_checkpoint_sha256": parent_sha,

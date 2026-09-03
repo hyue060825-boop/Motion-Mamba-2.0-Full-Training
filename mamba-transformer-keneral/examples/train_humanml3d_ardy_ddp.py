@@ -110,6 +110,7 @@ def parse_args():
             "generated_deep_v3",
             "generated_multidepth_v4",
             "d2_three_window_v1",
+            "d2_post_eviction_v1",
         ],
         default="uniform_range",
         help=(
@@ -119,7 +120,8 @@ def parse_args():
             "generated_deep_v3 uses the same teacher branch and generated targets "
             "at x3/x5/x10/x19; generated_multidepth_v4 biases generated targets "
             "toward x10/x19 while retaining the same teacher branch; "
-            "d2_three_window_v1 fixes seed/generated/target for D2 write training."
+            "d2_three_window_v1 fixes seed/generated/target for D2 write training; "
+            "d2_post_eviction_v1 fixes W1-W5 accepted history with a W6 target."
         ),
     )
     parser.add_argument(
@@ -181,6 +183,11 @@ def parse_args():
         ),
     )
     parser.add_argument(
+        "--generated-history-attach-seed-write",
+        action="store_true",
+        help="Retain gradients through the seed accepted write when BPTT starts at depth zero.",
+    )
+    parser.add_argument(
         "--generated-history-state-consistency-weight",
         type=float,
         default=0.0,
@@ -224,6 +231,20 @@ def parse_args():
     parser.add_argument("--content-memory-write-gate-init-scale", type=float, default=0.02)
     parser.add_argument("--content-memory-write-gate-bias-init", type=float, default=0.0)
     parser.add_argument("--content-memory-read-scale-init", type=float, default=0.0)
+    parser.add_argument(
+        "--content-memory-conditioning", choices=["none", "text"], default="none"
+    )
+    parser.add_argument(
+        "--content-memory-normalize-delta",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+    )
+    parser.add_argument(
+        "--content-memory-normalize-slots",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+    )
+    parser.add_argument("--content-memory-max-write-rate", type=float, default=1.0)
     parser.add_argument("--content-memory-intervention", choices=["normal", "zero_delta", "permute_delta", "write_off", "readout_off", "permute_memory"], default="normal")
     parser.add_argument(
         "--minimal-ff-size", type=int, default=None,
@@ -438,6 +459,9 @@ RESUME_CONTRACT_KEYS = (
     "content_memory_write_gate_init_scale",
     "content_memory_write_gate_bias_init",
     "content_memory_read_scale_init",
+    "content_memory_conditioning", "content_memory_normalize_delta",
+    "content_memory_normalize_slots", "content_memory_max_write_rate",
+    "generated_history_attach_seed_write",
     "minimal_ff_size", "training_state_intervention",
     "mamba_output_decay_start_windows",
     "mamba_output_decay_half_life_windows",
@@ -742,6 +766,7 @@ def main() -> int:
         "generated_deep_v3": 19,
         "generated_multidepth_v4": 19,
         "d2_three_window_v1": 3,
+        "d2_post_eviction_v1": 6,
     }.get(args.sequential_rollout_curriculum, args.sequential_rollout_windows)
     if args.sequential_rollout_min_windows < 2:
         raise ValueError("--sequential-rollout-min-windows must be at least 2")
@@ -754,7 +779,11 @@ def main() -> int:
         or args.generated_history_probability_5k > 0
     )
     expected_curriculum = (
-        "d2_three_window_v1"
+        (
+            "d2_post_eviction_v1"
+            if args.generated_history_attach_seed_write
+            else "d2_three_window_v1"
+        )
         if args.train_scope == "state_memory"
         else "generated_multidepth_v4"
         if args.history_sampling_strategy == "multidepth_v4"
@@ -792,6 +821,18 @@ def main() -> int:
             raise ValueError("state_memory train scope requires a state-aware interaction")
         if args.generated_history_bptt_windows <= 0:
             raise ValueError("state_memory train scope requires generated-history BPTT")
+        if args.generated_history_attach_seed_write and args.generated_history_bptt_windows < 1:
+            raise ValueError("attached seed writes require generated-history BPTT")
+        if (
+            args.generated_history_attach_seed_write
+            and args.generated_history_bptt_windows
+            < args.sequential_rollout_windows - 2
+        ):
+            raise ValueError(
+                "attached seed writes require BPTT to start at depth zero"
+            )
+    if not 0.0 < args.content_memory_max_write_rate <= 1.0:
+        raise ValueError("content-memory-max-write-rate must be in (0, 1]")
     if args.generated_history_state_consistency_weight < 0:
         raise ValueError("generated-history-state-consistency-weight must be non-negative")
     if (
@@ -881,6 +922,10 @@ def main() -> int:
                 content_memory_write_gate_init_scale=args.content_memory_write_gate_init_scale,
                 content_memory_write_gate_bias_init=args.content_memory_write_gate_bias_init,
                 content_memory_read_scale_init=args.content_memory_read_scale_init,
+                content_memory_conditioning=args.content_memory_conditioning,
+                content_memory_normalize_delta=args.content_memory_normalize_delta,
+                content_memory_normalize_slots=args.content_memory_normalize_slots,
+                content_memory_max_write_rate=args.content_memory_max_write_rate,
             ),
         )
         client.controller.configure_rollout_diagnostics(
@@ -1176,15 +1221,18 @@ def main() -> int:
                 args.sequential_cache_probability, data_generator, device, rank
             )
             if use_sequential_cache and args.sequential_rollout_curriculum in {
-                "long_horizon_v1", "generated_gate_v1", "d2_three_window_v1"
+                "long_horizon_v1", "generated_gate_v1", "d2_three_window_v1",
+                "d2_post_eviction_v1",
             }:
                 curriculum_draw = _global_uniform_draw(data_generator, device, rank)
                 if args.sequential_rollout_curriculum == "long_horizon_v1":
                     range_fn = long_horizon_v1_window_range
                 elif args.sequential_rollout_curriculum == "generated_gate_v1":
                     range_fn = generated_gate_v1_window_range
-                else:
+                elif args.sequential_rollout_curriculum == "d2_three_window_v1":
                     range_fn = lambda _draw: (3, 3)
+                else:
+                    range_fn = lambda _draw: (6, 6)
                 low, high = range_fn(curriculum_draw)
                 rollout_windows = _global_integer_draw(
                     low, high, data_generator, device, rank
@@ -1285,6 +1333,7 @@ def main() -> int:
                 max_recovery_meters=args.generated_history_max_recovery_meters,
                 max_supervision_points=args.generated_history_max_supervision_points,
                 bptt_windows=args.generated_history_bptt_windows,
+                attach_seed_write=args.generated_history_attach_seed_write,
                 state_consistency_weight=(
                     args.generated_history_state_consistency_weight
                     if args.mode == "hybrid" else 0.0
@@ -1680,6 +1729,7 @@ def main() -> int:
             "generated_history_periodic_reset_windows": args.generated_history_periodic_reset_windows,
             "generated_history_max_supervision_points": args.generated_history_max_supervision_points,
             "generated_history_bptt_windows": args.generated_history_bptt_windows,
+            "generated_history_attach_seed_write": args.generated_history_attach_seed_write,
             "generated_history_state_consistency_weight_requested": (
                 args.generated_history_state_consistency_weight
             ),
@@ -1746,6 +1796,10 @@ def main() -> int:
             "content_memory_read_enabled": args.content_memory_read_enabled,
             "content_memory_use_state_delta": args.content_memory_use_state_delta,
             "content_memory_intervention": args.content_memory_intervention,
+            "content_memory_conditioning": args.content_memory_conditioning,
+            "content_memory_normalize_delta": args.content_memory_normalize_delta,
+            "content_memory_normalize_slots": args.content_memory_normalize_slots,
+            "content_memory_max_write_rate": args.content_memory_max_write_rate,
             "content_memory_write_gate_context": args.content_memory_write_gate_context,
             "content_memory_decoder_init_scale": args.content_memory_decoder_init_scale,
             "content_memory_write_gate_init_scale": args.content_memory_write_gate_init_scale,

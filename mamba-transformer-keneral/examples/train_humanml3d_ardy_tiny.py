@@ -600,6 +600,7 @@ def _prepare_generated_history(
     max_recovery_meters: float = 0.0,
     max_supervision_points: int = 1,
     bptt_windows: int = 0,
+    attach_seed_write: bool = False,
     state_consistency_weight: float = 0.0,
     root_endpoint_loss_weight: float = 0.0,
 ) -> dict:
@@ -799,6 +800,9 @@ def _prepare_generated_history(
         supervision["generated_history_bptt_windows"] = bptt_windows
     fixed["generated_history_bptt_windows"] = bptt_windows
     for supervision in supervision_batches:
+        supervision["generated_history_attach_seed_write"] = attach_seed_write
+    fixed["generated_history_attach_seed_write"] = attach_seed_write
+    for supervision in supervision_batches:
         supervision["generated_history_state_consistency_weight"] = (
             state_consistency_weight
         )
@@ -845,7 +849,9 @@ def _prime_generated_history_bptt(raw, client, fixed) -> None:
                 first_heading_angle=seed_heading,
                 next_generation_frames=fixed["next_generation_frames"],
                 chunk_id=0,
-                detach=True,
+                detach=not bool(
+                    fixed.get("generated_history_attach_seed_write", False)
+                ),
             )
         else:
             if start_snapshot is None:

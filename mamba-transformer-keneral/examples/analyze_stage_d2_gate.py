@@ -118,6 +118,8 @@ def main() -> int:
         "--no-delta-train-root",
         default=None,
     )
+    parser.add_argument("--learned-results", default=None)
+    parser.add_argument("--parity-results", default=None)
     parser.add_argument("--results-output", default=None)
     parser.add_argument(
         "--causal-output", default=None
@@ -170,9 +172,15 @@ def main() -> int:
         "source": str(Path(__file__).resolve()),
         "source_sha256": _sha(Path(__file__).resolve()),
     }
-    learned = _json(REPO / "docs/D2_LEARNED_CAUSAL_MEMORY_RESULTS.json")
+    learned = _json(
+        Path(args.learned_results)
+        if args.learned_results
+        else REPO / "docs/D2_LEARNED_CAUSAL_MEMORY_RESULTS.json"
+    )
     parity = _json(
-        Path("/data4/zts/result/stage_d2_step0_native_parity_20260903/results.json")
+        Path(args.parity_results)
+        if args.parity_results
+        else Path("/data4/zts/result/stage_d2_step0_native_parity_20260903/results.json")
     )
 
     panels = ("table4", "9s_in_horizon", "9s_out_of_horizon", "20s_in_horizon", "40s_in_horizon")
@@ -336,6 +344,12 @@ def main() -> int:
         for key in LONG_METRICS[:4]
     )
     delta_established = delta_harm or full_beats_no_delta
+    delta_removal_improves = any(
+        interventions[name]["metrics"][key]["mean_difference"] < 0
+        and interventions[name]["metrics"][key]["ci95"][1] < 0
+        for name in ("zero_delta", "permute_delta")
+        for key in LONG_METRICS[:4]
+    )
 
     step100_gate_checks = {
         "trainability": trainability_pass,
@@ -411,6 +425,7 @@ def main() -> int:
         "trajectory_specific_behavioral_causality_established": trajectory_causal,
         "content_write_or_read_causality_with_ci_established": read_write_causal,
         "delta_state_independent_contribution_established": delta_established,
+        "delta_removal_or_permutation_significantly_improves": delta_removal_improves,
     }
     step100_output = {
         "schema_version": f"d2_step{args.stage}_gate_v1",
@@ -435,9 +450,18 @@ def main() -> int:
         "gate_checks": gate_checks,
         "step100_screening_checks": step100_gate_checks,
         "delta_state_independent_contribution_established": delta_established,
+        "delta_removal_or_permutation_significantly_improves": delta_removal_improves,
         "claim_boundary": (
-            "Persistent content write/read usage is established at step100; "
-            "trajectory-specific behavioral causality and delta-state contribution are not."
+            "Trajectory-specific state-conditioned persistent content-memory "
+            "write/read causality is established on the BONES selection panel; "
+            "delta-state independent contribution is not established."
+            if trajectory_causal and read_write_causal and not delta_established
+            else "Trajectory-specific state-conditioned persistent content-memory "
+            "write/read causality and delta-state variant evidence are established "
+            "on the BONES selection panel."
+            if trajectory_causal and read_write_causal and delta_established
+            else "Persistent content-memory trainability is established, but the "
+            "registered real-motion causal chain is incomplete."
         ),
     }
     for path, value in (
