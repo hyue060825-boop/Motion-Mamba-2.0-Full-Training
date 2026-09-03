@@ -57,21 +57,21 @@ COMMON=(
   --content-memory-read-scale-init 0 --init-checkpoint "$PARENT" --log-every 10
 )
 
-FULL_OUT=$BASE/stage_d2_bones_step100_full_20260903
-NO_DELTA_OUT=$BASE/stage_d2_bones_step100_no_delta_20260903
+FULL_OUT=$BASE/stage_d2_bones_step100_full_v2_20260903
+NO_DELTA_OUT=$BASE/stage_d2_bones_step100_no_delta_v2_20260903
 [[ ! -e "$FULL_OUT" ]] || { echo "refusing to overwrite $FULL_OUT" >&2; exit 1; }
 [[ ! -e "$NO_DELTA_OUT" ]] || { echo "refusing to overwrite $NO_DELTA_OUT" >&2; exit 1; }
 
 CUDA_VISIBLE_DEVICES=0,1,2,3 "$PY" -m torch.distributed.run \
   --standalone --nproc-per-node=4 "$ROOT/examples/train_humanml3d_ardy_ddp.py" \
   "${COMMON[@]}" --content-memory-use-state-delta --output-dir "$FULL_OUT" \
-  >"$BASE/stage_d2_bones_step100_full_20260903.log" 2>&1 &
+  >"$BASE/stage_d2_bones_step100_full_v2_20260903.log" 2>&1 &
 FULL_PID=$!
 
 CUDA_VISIBLE_DEVICES=4,5,6,7 "$PY" -m torch.distributed.run \
   --standalone --nproc-per-node=4 "$ROOT/examples/train_humanml3d_ardy_ddp.py" \
   "${COMMON[@]}" --no-content-memory-use-state-delta --output-dir "$NO_DELTA_OUT" \
-  >"$BASE/stage_d2_bones_step100_no_delta_20260903.log" 2>&1 &
+  >"$BASE/stage_d2_bones_step100_no_delta_v2_20260903.log" 2>&1 &
 NO_DELTA_PID=$!
 
 status=0

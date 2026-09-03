@@ -1455,6 +1455,9 @@ def main() -> int:
                 state_consistency_loss
             )
             mean_root_endpoint_loss = _mean_across_ranks(root_endpoint_loss)
+            mean_differentiable_rollout_loss = _mean_across_ranks(
+                differentiable_loss_value
+            )
             mean_raw_recovery = (
                 float(np.mean([value["raw_recovery_m"] for value in depth_metrics.values()]))
                 if depth_metrics else None
@@ -1497,9 +1500,7 @@ def main() -> int:
                     "generated_history_depth_metrics": depth_metrics,
                     "generated_history_probability": scheduled_probability,
                     "differentiable_rollout": use_differentiable_rollout,
-                    "differentiable_rollout_loss": _mean_across_ranks(
-                        differentiable_loss_value
-                    ),
+                    "differentiable_rollout_loss": mean_differentiable_rollout_loss,
                     "differentiable_rollout_windows": (
                         args.differentiable_rollout_windows
                         if use_differentiable_rollout else 0
