@@ -98,7 +98,7 @@ def _validate_pair(left: Path, right: Path) -> dict:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--stage", type=int, choices=[100, 250], default=100)
+    parser.add_argument("--stage", type=int, default=100)
     parser.add_argument(
         "--eval-root",
         default=None,
@@ -125,6 +125,8 @@ def main() -> int:
         "--causal-output", default=None
     )
     args = parser.parse_args()
+    if args.stage < 100:
+        parser.error("--stage must be at least 100 optimizer steps")
 
     eval_root = Path(
         args.eval_root

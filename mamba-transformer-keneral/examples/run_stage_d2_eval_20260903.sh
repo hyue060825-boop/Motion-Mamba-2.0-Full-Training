@@ -6,7 +6,16 @@ PY=/data3/zts/conda_envs/ardy_env/bin/python
 BASE=/data4/zts/result
 D2_STAGE=${D2_STAGE:-100}
 D2_FAMILY=${D2_FAMILY:-d2}
-if [[ $D2_FAMILY == d2r ]]; then
+if [[ $D2_FAMILY == d2rl ]]; then
+  case "$D2_STAGE" in
+    5000)
+      OUT=$BASE/stage_d2rl_bones_long_20260904/step5000/selection_eval
+      FULL=$BASE/stage_d2rl_bones_long_20260904/step5000/full/hybrid_humanml3d_ddp.pt
+      NO_DELTA=$BASE/stage_d2rl_bones_long_20260904/step5000/no_delta/hybrid_humanml3d_ddp.pt
+      ;;
+    *) echo "D2R-L stage must be 5000" >&2; exit 2 ;;
+  esac
+elif [[ $D2_FAMILY == d2r ]]; then
   case "$D2_STAGE" in
     100)
       OUT=$BASE/stage_d2r_bones_step100_selection_eval_20260903
