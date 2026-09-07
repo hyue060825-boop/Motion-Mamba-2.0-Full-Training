@@ -82,12 +82,19 @@ class DiTSequenceStack(nn.Module):
         content_memory_write_enabled: bool = True,
         content_memory_delta_mode: str = "normal",
         content_memory_condition: torch.Tensor | None = None,
+        content_memory_read_view: torch.Tensor | list[torch.Tensor] | None = None,
+        content_memory_read_view_level: str = "slots",
     ):
         self._validate_state(state)
         pending_layers = []
         layer_aux = []
         hidden = x
-        for layer, layer_state in zip(self.layers, state.layers):
+        for layer_index, (layer, layer_state) in enumerate(zip(self.layers, state.layers)):
+            layer_read_view = (
+                content_memory_read_view[layer_index]
+                if isinstance(content_memory_read_view, list)
+                else content_memory_read_view
+            )
             hidden, pending, aux = layer(
                 hidden,
                 condition,
@@ -101,6 +108,8 @@ class DiTSequenceStack(nn.Module):
                 content_memory_write_enabled=content_memory_write_enabled,
                 content_memory_delta_mode=content_memory_delta_mode,
                 content_memory_condition=content_memory_condition,
+                content_memory_read_view=layer_read_view,
+                content_memory_read_view_level=content_memory_read_view_level,
             )
             pending_layers.append(pending)
             layer_aux.append(aux)

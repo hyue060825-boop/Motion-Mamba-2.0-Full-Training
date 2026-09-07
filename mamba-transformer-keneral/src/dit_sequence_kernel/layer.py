@@ -68,6 +68,8 @@ class DiTSequenceLayer(nn.Module):
         content_memory_write_enabled: bool = True,
         content_memory_delta_mode: str = "normal",
         content_memory_condition: torch.Tensor | None = None,
+        content_memory_read_view: torch.Tensor | None = None,
+        content_memory_read_view_level: str = "slots",
     ):
         if condition.shape != (x.shape[0], self.d_model):
             raise ValueError(
@@ -98,6 +100,8 @@ class DiTSequenceLayer(nn.Module):
             content_memory_write_enabled=content_memory_write_enabled,
             content_memory_delta_mode=content_memory_delta_mode,
             content_memory_condition=content_memory_condition,
+            content_memory_read_view=content_memory_read_view,
+            content_memory_read_view_level=content_memory_read_view_level,
         )
         x = x + gate_mixer[:, None] * mixed
         mlp_input = _modulate(self.norm_mlp(x), shift_mlp, scale_mlp)

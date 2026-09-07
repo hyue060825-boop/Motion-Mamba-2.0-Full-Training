@@ -815,10 +815,17 @@ def main() -> int:
     if args.generated_history_bptt_windows and args.train_scope == "mixer":
         raise ValueError("generated-history BPTT requires outer denoiser DDP")
     if args.train_scope == "state_memory":
-        if args.mode != "hybrid" or not args.content_memory_enabled:
-            raise ValueError("state_memory train scope requires Hybrid content memory")
-        if args.token_state_interaction not in {"state_query", "state_kv_modulation"}:
-            raise ValueError("state_memory train scope requires a state-aware interaction")
+        if args.mode != "hybrid":
+            raise ValueError("state_memory train scope requires Hybrid mode")
+        if (
+            not args.content_memory_enabled
+            and args.token_state_interaction
+            not in {"state_query", "state_kv_modulation"}
+        ):
+            raise ValueError(
+                "state_memory train scope requires state_query/state_kv_modulation "
+                "or persistent content memory"
+            )
         if args.generated_history_bptt_windows <= 0:
             raise ValueError("state_memory train scope requires generated-history BPTT")
         if args.generated_history_attach_seed_write and args.generated_history_bptt_windows < 1:
@@ -990,10 +997,19 @@ def main() -> int:
     d2_gradient_groups = (
         _d2_gradient_groups(raw) if args.train_scope == "state_memory" else {}
     )
+    required_d2_groups = {"state_projector_grad_norm"}
+    if args.token_state_interaction in {"state_query", "state_kv_modulation"}:
+        required_d2_groups.add("state_address_grad_norm")
+    if args.content_memory_enabled:
+        required_d2_groups.update(
+            {"content_decoder_grad_norm", "write_gate_grad_norm", "read_scale_grad_norm"}
+        )
     if args.train_scope == "state_memory" and any(
-        not group for group in d2_gradient_groups.values()
+        not d2_gradient_groups[name] for name in required_d2_groups
     ):
-        missing = [name for name, group in d2_gradient_groups.items() if not group]
+        missing = [
+            name for name in sorted(required_d2_groups) if not d2_gradient_groups[name]
+        ]
         raise RuntimeError(f"state_memory train scope is missing groups: {missing}")
     trainable_parameter_count = sum(parameter.numel() for parameter in parameters)
     trainable_parameter_names = (

@@ -78,7 +78,7 @@ def window_summary(values: Sequence[float], *, start_index: int = 5) -> dict[str
     slope = float(np.polyfit(x, tail, 1)[0]) if len(tail) >= 2 else 0.0
     return {
         "mean": float(array.mean()),
-        "post_w5_auc": float(np.trapz(tail)),
+        "post_w5_auc": float(np.trapezoid(tail)),
         "post_w5_slope": slope,
         "final": float(array[-1]),
     }

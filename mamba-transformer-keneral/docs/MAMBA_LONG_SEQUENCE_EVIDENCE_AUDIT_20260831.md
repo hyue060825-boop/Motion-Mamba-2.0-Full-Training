@@ -76,12 +76,12 @@ Training artifacts:
 
 ## Capacity Control
 
-| Configuration | Active root+body parameters |
-|---|---:|
-| ARDY fresh-mixer | 147,150,996 |
-| Minimal W4/W8/W16 | 247,914,644 |
-| Minimal-ParamMatch | 352,823,444 |
-| Hybrid | 352,578,724 |
+| Configuration      | Active root+body parameters |
+| ------------------ | --------------------------: |
+| ARDY fresh-mixer   |                 147,150,996 |
+| Minimal W4/W8/W16  |                 247,914,644 |
+| Minimal-ParamMatch |                 352,823,444 |
+| Hybrid             |                 352,578,724 |
 
 ParamMatch differs from Hybrid by 244,720 parameters (0.069%). Expansion
 copies all old FFN channels exactly, zeroes new output columns, and rejects
@@ -92,12 +92,12 @@ non-FF shape mismatches.
 Differences are `Hybrid decay-carry - Minimal-W4`; negative favors Hybrid. CIs
 are actor/motion cluster-bootstrap 95% intervals.
 
-| Step | Duration | Root AUC | Root slope | Constraint AUC | Constraint slope |
-|---:|---:|---:|---:|---:|---:|
-| 100 | 20 s | -35.759 [-63.012, -15.303] | +0.748 [-0.109, 1.678] | -39.727 [-63.210, -15.101] | +0.891 [-0.675, 2.573] |
-| 100 | 40 s | -430.076 [-534.597, -351.926] | +0.124 [-0.796, 1.001] | -401.244 [-490.764, -327.770] | +0.877 [-0.032, 1.780] |
-| 250 | 20 s | -31.459 [-59.708, -11.437] | +0.856 [0.009, 1.787] | -36.526 [-60.883, -13.714] | +1.137 [-0.075, 2.604] |
-| 250 | 40 s | -421.438 [-547.597, -328.143] | -0.018 [-0.945, 0.829] | -402.433 [-514.951, -309.623] | +0.631 [-0.267, 1.492] |
+| Step | Duration |                      Root AUC |             Root slope |                Constraint AUC |       Constraint slope |
+| ---: | -------: | ----------------------------: | ---------------------: | ----------------------------: | ---------------------: |
+|  100 |     20 s |    -35.759 [-63.012, -15.303] | +0.748 [-0.109, 1.678] |    -39.727 [-63.210, -15.101] | +0.891 [-0.675, 2.573] |
+|  100 |     40 s | -430.076 [-534.597, -351.926] | +0.124 [-0.796, 1.001] | -401.244 [-490.764, -327.770] | +0.877 [-0.032, 1.780] |
+|  250 |     20 s |    -31.459 [-59.708, -11.437] |  +0.856 [0.009, 1.787] |    -36.526 [-60.883, -13.714] | +1.137 [-0.075, 2.604] |
+|  250 |     40 s | -421.438 [-547.597, -328.143] | -0.018 [-0.945, 0.829] | -402.433 [-514.951, -309.623] | +0.631 [-0.267, 1.492] |
 
 The AUC signal is large and consistent, but 7 of 8 slope means fail the
 required negative direction. At step 250, the 20-second Root-slope CI is wholly
@@ -143,11 +143,11 @@ physical safety: 40-second max Root speed reaches 14.60 m/s at step 100 and
 The isolated real-checkpoint root-block benchmark is not a quality result. It
 serially measures W1/2/4/8/16/32 with warmup 3 and 10 repeats on one RTX 4090.
 
-| Mode | W32 median CUDA time | W32 persistent state | Log-log alpha | State constant after W4 |
-|---|---:|---:|---:|---|
-| ARDY explicit full-history | 142.29 ms | 0 | 1.018 | yes |
-| Minimal sliding W4 | 414.22 ms | 3,408,288 B | 0.921 | yes |
-| Hybrid W4 carry | 1,017.76 ms | 7,709,088 B | 0.878 | yes |
+| Mode                       | W32 median CUDA time | W32 persistent state | Log-log alpha | State constant after W4 |
+| -------------------------- | -------------------: | -------------------: | ------------: | ----------------------- |
+| ARDY explicit full-history |            142.29 ms |                    0 |         1.018 | yes                     |
+| Minimal sliding W4         |            414.22 ms |          3,408,288 B |         0.921 | yes                     |
+| Hybrid W4 carry            |          1,017.76 ms |          7,709,088 B |         0.878 | yes                     |
 
 Both Minimal and Hybrid have bounded state and near-linear measured total time
 in this range. Hybrid is slower and uses more state. Linearity is not unique to

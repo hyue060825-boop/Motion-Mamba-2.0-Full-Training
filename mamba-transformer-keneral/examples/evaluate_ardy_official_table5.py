@@ -85,6 +85,18 @@ def parse_args() -> argparse.Namespace:
         help="Reset only persistent KV/SSM state every K generated windows; 0 disables.",
     )
     parser.add_argument("--state-diagnostics-output", default=None)
+    parser.add_argument("--content-memory-tensor-trace-output", default=None)
+    parser.add_argument(
+        "--external-memory-bank", default=None,
+        help="torch file containing read-only cross-run bank keyed by donor/window/block/layer",
+    )
+    parser.add_argument(
+        "--external-memory-mapping", default=None,
+        help="JSON object mapping recipient sample IDs to donor sample IDs",
+    )
+    parser.add_argument(
+        "--external-memory-mode", choices=["own", "donor"], default="donor",
+    )
     parser.add_argument("--per-sample-output", default=None)
     parser.add_argument("--catastrophic-root-threshold-cm", type=float, default=500.0)
     parser.add_argument("--mamba-output-decay-start-windows", type=int, default=0)
@@ -102,9 +114,16 @@ def parse_args() -> argparse.Namespace:
         "--content-memory-intervention",
         choices=[
             "normal", "zero_delta", "permute_delta", "write_off",
-            "readout_off", "permute_memory",
+            "readout_off", "permute_memory", "persistent_read_permutation",
+            "freeze_write_after_w4", "one_shot_permute_plus_freeze_write",
+            "semantic_mismatch_persistent_read_permutation",
         ],
         default="normal",
+    )
+    parser.add_argument(
+        "--content-memory-permutation",
+        default=None,
+        help="JSON list of a fixed derangement over the evaluation batch; used by D3 read interventions.",
     )
     add_sequence_checkpoint_arguments(parser)
     return parser.parse_args()
@@ -136,6 +155,32 @@ def _goal_joint_indices(skeleton) -> list[int]:
 def _stable_goal_joint(sample_id: str, goal_number: int, candidates: list[int], seed: int) -> int:
     digest = hashlib.sha256(f"{seed}:{sample_id}:goal:{goal_number}".encode()).digest()
     return candidates[int.from_bytes(digest[:8], "little") % len(candidates)]
+
+
+def _semantic_derangement(features: torch.Tensor, actor_uids: list[str]) -> torch.Tensor:
+    """Deterministic farthest-text pairing within one evaluator batch."""
+    if features.ndim != 2 or features.shape[0] <= 1:
+        raise ValueError("semantic mismatch pairing requires a batch of at least two")
+    normalized = torch.nn.functional.normalize(features.float(), dim=-1)
+    cosine = normalized @ normalized.T
+    n = features.shape[0]
+    import itertools
+    candidates = []
+    permutations = (
+        itertools.permutations(range(n))
+        if n <= 8
+        else (tuple((i + shift) % n for i in range(n)) for shift in range(1, n))
+    )
+    for perm in permutations:
+        if any(i == j for i, j in enumerate(perm)):
+            continue
+        actor_penalty = sum(actor_uids[i] == actor_uids[j] for i, j in enumerate(perm))
+        cost = sum(float(cosine[i, j]) for i, j in enumerate(perm))
+        candidates.append((actor_penalty, cost, perm))
+    if not candidates:
+        raise ValueError("no derangement exists for semantic pairing")
+    _, _, result = min(candidates, key=lambda item: (item[0], item[1], item[2]))
+    return torch.tensor(result, dtype=torch.long)
 
 
 def _build_official_sample(
@@ -323,14 +368,23 @@ def main() -> int:
             enabled=bool(args.state_diagnostics_output),
             periodic_reset_windows=args.periodic_state_reset_windows,
         )
+        client.controller.configure_content_memory_tensor_trace(
+            enabled=bool(args.content_memory_tensor_trace_output)
+        )
         client.controller.configure_mamba_output_decay(
             start_windows=args.mamba_output_decay_start_windows,
             half_life_windows=args.mamba_output_decay_half_life_windows,
             min_scale=args.mamba_output_decay_min_scale,
         )
         client.controller.configure_state_intervention(args.state_intervention)
+        permutation = None
+        if args.content_memory_permutation:
+            permutation = torch.tensor(
+                json.loads(Path(args.content_memory_permutation).read_text()),
+                dtype=torch.long,
+            )
         client.controller.configure_content_memory_intervention(
-            args.content_memory_intervention
+            args.content_memory_intervention, permutation=permutation
         )
     checkpoint = _load_checkpoint(
         model, args.mode, args.checkpoint, device, checkpoint=checkpoint
@@ -476,6 +530,17 @@ def main() -> int:
     artifact_goal_joints = []
     state_diagnostics = []
     content_memory_audit = []
+    content_memory_tensor_trace = []
+    external_memory_bank = None
+    external_memory_mapping = None
+    if args.external_memory_bank:
+        external_memory_bank = torch.load(args.external_memory_bank, map_location="cpu")
+        if not isinstance(external_memory_bank, dict):
+            raise ValueError("external memory bank must be a dictionary")
+    if args.external_memory_mapping:
+        external_memory_mapping = json.loads(Path(args.external_memory_mapping).read_text())
+        if not isinstance(external_memory_mapping, dict):
+            raise ValueError("external memory mapping must be a JSON object")
     per_sample_rows = []
     num_windows = math.ceil(generation_frames / horizon)
     window_root_errors = [[] for _ in range(num_windows)]
@@ -534,6 +599,28 @@ def main() -> int:
                 )[:, history_frames:]
             else:
                 client.reset_memory()
+                if external_memory_bank is not None:
+                    recipient_ids = [str(item["id"]) for item in items]
+                    if args.external_memory_mode == "own":
+                        donor_ids = recipient_ids
+                    else:
+                        try:
+                            donor_ids = [str(external_memory_mapping[item_id]) for item_id in recipient_ids]
+                        except KeyError as exc:
+                            raise KeyError(f"external mapping missing recipient {exc.args[0]}") from exc
+                    client.controller.configure_external_memory_read(
+                        external_memory_bank,
+                        recipient_ids=recipient_ids,
+                        donor_ids=donor_ids,
+                        mode=args.external_memory_mode,
+                    )
+                if args.content_memory_intervention == "semantic_mismatch_persistent_read_permutation":
+                    client.controller.configure_content_memory_intervention(
+                        args.content_memory_intervention,
+                        permutation=_semantic_derangement(
+                            batch["text_feature"], [str(item["actor_uid"]) for item in items]
+                        ),
+                    )
                 history_lengths = torch.full(
                     (size,), history_frames, dtype=torch.long, device=device
                 )
@@ -590,6 +677,12 @@ def main() -> int:
                     for record in client.controller.content_memory_audit
                 )
                 client.controller.content_memory_audit.clear()
+                if args.content_memory_tensor_trace_output:
+                    content_memory_tensor_trace.extend(
+                        {"batch_start": start, "sample_ids": [item["id"] for item in items], **record}
+                        for record in client.controller.content_memory_tensor_trace
+                    )
+                    client.controller.content_memory_tensor_trace.clear()
         torch.cuda.synchronize(device)
         latencies.extend([(time.perf_counter() - started) / size] * size)
 
@@ -874,6 +967,13 @@ def main() -> int:
         "minimal_ff_size": args.minimal_ff_size,
         "state_intervention": args.state_intervention,
         "content_memory_intervention": args.content_memory_intervention,
+        "external_memory_bank": str(Path(args.external_memory_bank).resolve()) if args.external_memory_bank else None,
+        "external_memory_mapping": str(Path(args.external_memory_mapping).resolve()) if args.external_memory_mapping else None,
+        "external_memory_mode": args.external_memory_mode if args.external_memory_bank else None,
+        "content_memory_permutation": (
+            json.loads(Path(args.content_memory_permutation).read_text())
+            if args.content_memory_permutation else None
+        ),
         "sequence_architecture": sequence_architecture,
         "state_intervention_checksum": (
             getattr(client.controller, "_last_intervention_checksum", None)
@@ -979,6 +1079,10 @@ def main() -> int:
         per_sample_path.write_text(
             "".join(json.dumps(record) + "\n" for record in per_sample_rows)
         )
+    if args.content_memory_tensor_trace_output:
+        trace_path = Path(args.content_memory_tensor_trace_output)
+        trace_path.parent.mkdir(parents=True, exist_ok=True)
+        torch.save(content_memory_tensor_trace, trace_path)
     if args.artifacts_output:
         artifact_path = Path(args.artifacts_output)
         artifact_path.parent.mkdir(parents=True, exist_ok=True)

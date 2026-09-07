@@ -19,10 +19,14 @@ MAMBA_REPO = os.environ.get(
     "MAMBA_REPO", "/home/plote/mambamotion/basecode/mamba/state-spaces-mamba"
 )
 SRC_DIR = str(Path(__file__).resolve().parent.parent / "src")
+LOCAL_ARDY = str(Path(__file__).resolve().parents[2] / "ardy")
 
 requires_cuda = pytest.mark.skipif(
     not torch.cuda.is_available(), reason="CUDA required for Mamba-3 kernels"
 )
+
+if LOCAL_ARDY not in sys.path:
+    sys.path.insert(0, LOCAL_ARDY)
 
 if torch.cuda.is_available():
     torch.empty(1, device="cuda")

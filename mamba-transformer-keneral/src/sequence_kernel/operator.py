@@ -62,6 +62,12 @@ class SequenceKernel(nn.Module):
         # Keep the minimal import/registration contract intact.  Hybrid-only
         # content memory is attached below, after the mode checks.
         self.content_memory = None
+        self.last_content_memory_diagnostics: dict[str, float | bool | str | None] = {}
+        self.record_memory_read_debug = False
+        self.memory_read_debug_trace: list[dict] = []
+        self.memory_read_debug_epoch = 0
+        self.memory_read_debug_phase = "noisy_read"
+        self.memory_read_debug_level = "slots"
 
         if config.mode == "minimal":
             if (
@@ -79,7 +85,12 @@ class SequenceKernel(nn.Module):
             raise ValueError("hybrid mode requires the existing Mamba3 module")
         if not isinstance(mamba3, nn.Module):
             raise TypeError("mamba3 must be a torch.nn.Module")
-        if config.interaction in {"naive_gated_add", "h0_parallel", "h1_innovation", "h2_delta_rule"} and state_projector is not None:
+        if (
+            config.interaction
+            in {"naive_gated_add", "h0_parallel", "h1_innovation", "h2_delta_rule"}
+            and state_projector is not None
+            and not config.content_memory_enabled
+        ):
             raise ValueError("naive hybrid does not use a state_projector")
 
         # The import is intentionally deferred: constructing/importing minimal
@@ -103,12 +114,11 @@ class SequenceKernel(nn.Module):
         self._mamba_wrapper = mamba_wrapper
         self._mamba_reset_fn = mamba_reset_fn
         self.runtime_mamba_output_scale = 1.0
-        self.last_content_memory_diagnostics: dict[str, float | bool | str | None] = {}
         if config.interaction == "naive_gated_add":
             self.fusion_gate_logit = nn.Parameter(
                 torch.tensor(float(config.fusion_gate_logit_init))
             )
-            self.state_projector = None
+            self.state_projector = state_projector if config.content_memory_enabled else None
             self.token_state_interaction = None
             self.output_interaction = None
             self.delta_rule = None
@@ -170,8 +180,25 @@ class SequenceKernel(nn.Module):
             )
 
         if config.content_memory_enabled:
-            if not self.uses_token_state_interaction:
-                raise ValueError("content memory requires state_query or state_kv_modulation")
+            if self.mode != "hybrid":
+                raise ValueError("content memory requires hybrid mode")
+            # Memory-only ablations still project Mamba state for writes, but
+            # do not inject that summary into the Attention query/key path.
+            if self.state_projector is None:
+                from state_memory_operator.state_projector import StateProjector
+
+                nheads = getattr(mamba3, "nheads", None)
+                headdim = getattr(mamba3, "headdim", None)
+                if nheads is None or headdim is None:
+                    raise ValueError(
+                        "content memory requires Mamba nheads/headdim or an "
+                        "explicit state_projector"
+                    )
+                self.state_projector = StateProjector(
+                    nheads=nheads,
+                    headdim=headdim,
+                    d_summary=config.state_summary_dim,
+                )
             from state_memory_operator.content_memory import PersistentContentMemory
 
             self.content_memory = PersistentContentMemory(
@@ -198,6 +225,12 @@ class SequenceKernel(nn.Module):
         return self.mode == "hybrid" and self.config.interaction in {
             "state_query", "state_kv_modulation"
         }
+
+    @property
+    def uses_state_summary(self) -> bool:
+        return self.mode == "hybrid" and (
+            self.uses_token_state_interaction or self.content_memory is not None
+        )
 
     @property
     def uses_output_interaction(self) -> bool:
@@ -252,9 +285,9 @@ class SequenceKernel(nn.Module):
         state_summary = None
         state_delta = None
         persistent_memory = None
-        if self.uses_token_state_interaction:
+        if self.uses_state_summary:
             if mamba_state is None:
-                raise RuntimeError("C1 interaction requires an initialized Mamba state")
+                raise RuntimeError("state-aware memory requires an initialized Mamba state")
             state_summary = self._project_state(mamba_state)
             state_delta = torch.zeros_like(state_summary)
         if self.content_memory is not None:
@@ -280,10 +313,10 @@ class SequenceKernel(nn.Module):
             )
         if self.mode == "minimal" and state.mamba_state is not None:
             raise ValueError("minimal state must not contain recurrent Mamba state")
-        if self.uses_token_state_interaction and (
+        if self.uses_state_summary and (
             state.state_summary is None or state.state_delta is None
         ):
-            raise ValueError("C1 state requires committed state_summary and state_delta")
+            raise ValueError("state-aware memory requires committed state_summary and state_delta")
         if self.content_memory is not None and state.persistent_memory is None:
             raise ValueError("content-memory state requires persistent_memory slots")
 
@@ -304,6 +337,8 @@ class SequenceKernel(nn.Module):
         content_memory_delta: Optional[torch.Tensor] = None,
         content_memory_delta_mode: str = "normal",
         content_memory_condition: Optional[torch.Tensor] = None,
+        content_memory_read_view: Optional[torch.Tensor] = None,
+        content_memory_read_view_level: str = "slots",
     ) -> tuple[torch.Tensor, PendingSequenceKernelState, dict]:
         """Evaluate selected paths and return their uncommitted next memory."""
         if x.ndim != 3:
@@ -351,11 +386,42 @@ class SequenceKernel(nn.Module):
             if content_memory_read_enabled is None
             else content_memory_read_enabled
         )
+        if content_memory_read_view_level not in {"slots", "read_ready"}:
+            raise ValueError("content_memory_read_view_level must be slots or read_ready")
+        durable_slots_debug = None
+        if self.record_memory_read_debug and state.persistent_memory is not None:
+            durable_slots_debug = state.persistent_memory.detach().clone()
         if self.content_memory is not None and do_read and memory_read_enabled:
-            memory_content = self.content_memory.read(
-                state.persistent_memory, enabled=True
-            ).to(x.dtype)
+            read_slots = state.persistent_memory
+            if content_memory_read_view is not None:
+                if content_memory_read_view.shape != state.persistent_memory.shape:
+                    raise ValueError(
+                        "content_memory_read_view must match persistent memory shape"
+                    )
+                # Read-view interventions are deliberately non-mutating.  The
+                # durable slots remain the source for the write proposal below.
+                read_slots = content_memory_read_view
+            if content_memory_read_view is not None and content_memory_read_view_level == "read_ready":
+                if read_slots.device != x.device or read_slots.dtype != x.dtype:
+                    raise ValueError("read-ready external memory must match mixer input device/dtype")
+                if not read_slots.is_contiguous():
+                    raise ValueError("read-ready external memory must be contiguous")
+                memory_content = self.content_memory.validate_read_ready(read_slots)
+            else:
+                memory_content = self.content_memory.read(read_slots, enabled=True).to(x.dtype)
             read_residual_scale = self.content_memory.read_residual_scale
+            if self.record_memory_read_debug:
+                self.memory_read_debug_trace.append({
+                    "epoch": int(self.memory_read_debug_epoch),
+                    "phase": str(self.memory_read_debug_phase),
+                    "level": "read_ready",
+                    "durable_slots": durable_slots_debug,
+                    "read_ready": memory_content.detach().clone(),
+                    "dtype": str(memory_content.dtype),
+                    "device": str(memory_content.device),
+                    "stride": tuple(memory_content.stride()),
+                    "contiguous": bool(memory_content.is_contiguous()),
+                })
         if enable_attention_path and self.uses_token_state_interaction:
             summary = state.state_summary
             delta = state.state_delta
@@ -437,7 +503,7 @@ class SequenceKernel(nn.Module):
 
         next_state_summary = None
         next_state_delta = None
-        if self.uses_token_state_interaction and next_mamba_state is not None:
+        if self.uses_state_summary and next_mamba_state is not None:
             next_state_summary = self._project_state(next_mamba_state)
             next_state_delta = next_state_summary - state.state_summary
 

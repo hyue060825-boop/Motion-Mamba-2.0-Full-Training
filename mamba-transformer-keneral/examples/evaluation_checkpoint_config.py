@@ -120,8 +120,6 @@ def sequence_config_kwargs(
         raise ValueError(
             "resolved content-memory architecture disagrees with checkpoint parameters"
         )
-    if has_content_parameters and resolved["token_state_interaction"] == "naive_gated_add":
-        raise ValueError("content-memory checkpoint requires a state-aware interaction")
     audit = {"resolved": resolved, "source": sources}
     return resolved, audit
 

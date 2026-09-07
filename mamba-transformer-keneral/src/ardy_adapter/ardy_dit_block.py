@@ -269,6 +269,8 @@ class ArdyDiTSequenceBlock(nn.Module):
         self.content_memory_read_enabled_runtime: bool | None = None
         self.content_memory_write_enabled_runtime = True
         self.content_memory_delta_mode_runtime = "normal"
+        self.content_memory_read_view_runtime: list[torch.Tensor] | None = None
+        self.content_memory_read_view_level_runtime = "slots"
         self.read_only_forwards = 0
         self.accepted_commits = 0
 
@@ -451,6 +453,12 @@ class ArdyDiTSequenceBlock(nn.Module):
                 content_memory_write_enabled=self.content_memory_write_enabled_runtime,
                 content_memory_delta_mode=self.content_memory_delta_mode_runtime,
                 content_memory_condition=memory_condition[start:stop],
+                content_memory_read_view=(
+                    None
+                    if self.content_memory_read_view_runtime is None
+                    else self.content_memory_read_view_runtime
+                ),
+                content_memory_read_view_level=self.content_memory_read_view_level_runtime,
             )
             hidden_parts.append(part_hidden)
         hidden = torch.cat(hidden_parts, dim=0)
@@ -479,6 +487,11 @@ class ArdyDiTSequenceBlock(nn.Module):
                 content_memory_write_enabled=self.content_memory_write_enabled_runtime,
                 content_memory_delta_mode=self.content_memory_delta_mode_runtime,
                 content_memory_condition=memory_condition,
+                # Accepted writes use the trajectory's durable memory as the
+                # write context; the read-view intervention only affects the
+                # generated read path.
+                content_memory_read_view=None,
+                content_memory_read_view_level="slots",
             )
             self.accepted_commits += 1
             self._accepted_commit = None

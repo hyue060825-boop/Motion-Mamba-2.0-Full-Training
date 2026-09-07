@@ -153,6 +153,41 @@ def test_content_memory_permutation_requires_non_singleton_batch():
         controller._maybe_permute_content_memory()
 
 
+def test_persistent_read_permutation_is_read_only_and_fixed_derangement():
+    controller, layer = _content_intervention_controller()
+    controller.content_memory_intervention = "persistent_read_permutation"
+    original = layer.persistent_memory.clone()
+    attention_before = controller._attention_checksum()
+    controller._set_content_memory_runtime()
+    first_view = controller.root_block.content_memory_read_view_runtime[0]
+    assert controller._content_memory_permutation.tolist() == [1, 0]
+    torch.testing.assert_close(first_view, original.roll(1, dims=0))
+    torch.testing.assert_close(layer.persistent_memory, original)
+    assert controller._attention_checksum() == attention_before
+    controller._completed_windows = 5
+    controller._set_content_memory_runtime()
+    assert controller._content_memory_permutation.tolist() == [1, 0]
+    torch.testing.assert_close(layer.persistent_memory, original)
+    assert len([x for x in controller.content_memory_audit if x.get("event") == "persistent_read_window"]) == 2
+
+
+def test_persistent_read_permutation_rejects_singleton_batch():
+    controller, _ = _content_intervention_controller(batch_size=1)
+    controller.content_memory_intervention = "persistent_read_permutation"
+    with pytest.raises(ValueError, match="batch size > 1"):
+        controller._set_content_memory_runtime()
+
+
+def test_freeze_write_controls_after_w4():
+    controller, _ = _content_intervention_controller()
+    controller.content_memory_intervention = "freeze_write_after_w4"
+    controller._set_content_memory_runtime()
+    assert controller.root_block.content_memory_write_enabled_runtime is False
+    controller._completed_windows = 3
+    controller._set_content_memory_runtime()
+    assert controller.root_block.content_memory_write_enabled_runtime is True
+
+
 def _panel_row(panel_id="p0"):
     return {
         "panel_id": panel_id,

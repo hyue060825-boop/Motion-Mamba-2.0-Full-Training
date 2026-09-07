@@ -60,6 +60,8 @@ class ArdyDiffusionMemoryController:
         self.periodic_reset_windows = 0
         self.record_state_diagnostics = False
         self.state_diagnostics: list[dict[str, Any]] = []
+        self.record_content_memory_tensors = False
+        self.content_memory_tensor_trace: list[dict[str, Any]] = []
         self._previous_mamba_states: dict[str, list[Any]] = {}
         self._capture_training_snapshots = False
         self._training_snapshot_depths: set[int] = set()
@@ -75,21 +77,130 @@ class ArdyDiffusionMemoryController:
         self.intervention_audit: list[dict[str, Any]] = []
         self.content_memory_intervention = "normal"
         self._content_memory_permutation_applied = False
+        self._content_memory_permutation: Optional[torch.Tensor] = None
+        self._content_memory_read_trace_window: Optional[int] = None
         self.content_memory_audit: list[dict[str, Any]] = []
+        # Optional read-only cross-run memory source. The bank is keyed by
+        # (donor_id, accepted_window, block, layer) and is never committed.
+        self._external_memory_bank: Optional[dict[tuple[str, int, str, int], torch.Tensor]] = None
+        self._external_memory_recipient_ids: Optional[list[str]] = None
+        self._external_memory_donor_ids: Optional[list[str]] = None
+        self._external_memory_mode: Optional[str] = None
+        self._external_memory_level = "slots"
 
-    def configure_content_memory_intervention(self, strategy: str = "normal") -> None:
-        allowed = {"normal", "zero_delta", "permute_delta", "write_off", "readout_off", "permute_memory"}
+    def configure_content_memory_intervention(
+        self,
+        strategy: str = "normal",
+        *,
+        permutation: Optional[torch.Tensor] = None,
+    ) -> None:
+        allowed = {
+            "normal", "zero_delta", "permute_delta", "write_off", "readout_off",
+            "permute_memory", "persistent_read_permutation",
+            "freeze_write_after_w4", "one_shot_permute_plus_freeze_write",
+            "semantic_mismatch_persistent_read_permutation",
+        }
         if strategy not in allowed:
             raise ValueError(f"unknown content-memory intervention {strategy!r}")
+        if permutation is not None:
+            if permutation.ndim != 1 or permutation.dtype != torch.long:
+                raise ValueError("content-memory permutation must be a 1-D long tensor")
         self.content_memory_intervention = strategy
+        self._content_memory_permutation = permutation.detach().clone() if permutation is not None else None
         self._content_memory_permutation_applied = False
+        self._content_memory_read_trace_window = None
         self.content_memory_audit.clear()
         self._set_content_memory_runtime()
+
+    def configure_external_memory_read(
+        self,
+        bank: Optional[dict[tuple[str, int, str, int], torch.Tensor]],
+        *,
+        recipient_ids: Optional[list[str]] = None,
+        donor_ids: Optional[list[str]] = None,
+        mode: str = "donor",
+        level: str = "read_ready",
+    ) -> None:
+        """Install a fixed, read-only cross-run memory source for one batch.
+
+        ``bank`` contains committed slots indexed by donor identity, accepted
+        window index, block name and DiT layer. ``mode='own'`` is an explicit
+        offline replay control; ``mode='donor'`` uses ``donor_ids``. Durable
+        recipient state and all write proposals remain untouched.
+        """
+        if bank is None:
+            self._external_memory_bank = None
+            self._external_memory_recipient_ids = None
+            self._external_memory_donor_ids = None
+            self._external_memory_mode = None
+            return
+        if mode not in {"own", "donor"}:
+            raise ValueError("external memory mode must be 'own' or 'donor'")
+        if level not in {"slots", "read_ready"}:
+            raise ValueError("external memory level must be slots or read_ready")
+        if not recipient_ids or len(recipient_ids) == 0:
+            raise ValueError("recipient_ids are required for external memory")
+        if mode == "donor" and (not donor_ids or len(donor_ids) != len(recipient_ids)):
+            raise ValueError("donor_ids must match recipient_ids for donor mode")
+        if mode == "own":
+            donor_ids = list(recipient_ids)
+        if any(str(a) == str(b) for a, b in zip(recipient_ids, donor_ids)) and mode == "donor":
+            raise ValueError("donor mapping must not contain self mappings")
+        self._external_memory_bank = bank
+        self._external_memory_recipient_ids = [str(x) for x in recipient_ids]
+        self._external_memory_donor_ids = [str(x) for x in donor_ids]
+        self._external_memory_mode = mode
+        self._external_memory_level = level
+        self._content_memory_read_trace_window = None
+        self._set_content_memory_runtime()
+
+    def configure_memory_read_debug(self, *, enabled: bool, epoch: int = 0, phase: str = "noisy_read") -> None:
+        if phase not in {"noisy_read", "accepted_commit"}:
+            raise ValueError("memory debug phase must be noisy_read or accepted_commit")
+        for block in (self.root_block, self.body_block):
+            for layer in block.sequence_stack.layers:
+                layer.mixer.record_memory_read_debug = bool(enabled)
+                layer.mixer.memory_read_debug_epoch = int(epoch)
+                layer.mixer.memory_read_debug_phase = phase
+                if not enabled:
+                    layer.mixer.memory_read_debug_trace.clear()
+
+    def _external_memory_views(self, completed_windows: int, block_name: str, block) -> list[Optional[torch.Tensor]]:
+        if self._external_memory_bank is None or self._external_memory_donor_ids is None:
+            return []
+        if block._sequence_state is None:
+            return []
+        if len(self._external_memory_donor_ids) != block._sequence_state.layers[0].attention_cache.batch_size:
+            raise ValueError("external memory mapping batch size does not match sequence state")
+        views: list[Optional[torch.Tensor]] = []
+        for layer_index, layer in enumerate(block._sequence_state.layers):
+            if layer.persistent_memory is None:
+                views.append(None)
+                continue
+            rows = []
+            for donor_id in self._external_memory_donor_ids:
+                key = (str(donor_id), int(completed_windows), block_name, int(layer_index))
+                if key not in self._external_memory_bank:
+                    raise KeyError(f"external memory bank missing {key}")
+                rows.append(self._external_memory_bank[key])
+            view = torch.stack(rows, dim=0).to(
+                device=layer.persistent_memory.device,
+                dtype=layer.persistent_memory.dtype,
+            )
+            if view.shape != layer.persistent_memory.shape:
+                raise ValueError(f"external memory shape {tuple(view.shape)} != {tuple(layer.persistent_memory.shape)}")
+            views.append(view)
+        return views
 
     def _set_content_memory_runtime(self) -> None:
         strategy = getattr(self, "content_memory_intervention", "normal")
         read_enabled = not (strategy == "readout_off" and self._completed_windows >= 4)
-        write_enabled = strategy != "write_off"
+        if strategy == "write_off":
+            write_enabled = False
+        elif strategy in {"freeze_write_after_w4", "one_shot_permute_plus_freeze_write"}:
+            write_enabled = self._completed_windows < 4
+        else:
+            write_enabled = True
         mode = {
             "zero_delta": "zero",
             "permute_delta": "permute",
@@ -98,6 +209,105 @@ class ArdyDiffusionMemoryController:
             block.content_memory_read_enabled_runtime = read_enabled
             block.content_memory_write_enabled_runtime = write_enabled
             block.content_memory_delta_mode_runtime = mode
+            block.content_memory_read_view_runtime = None
+            block.content_memory_read_view_level_runtime = "slots"
+
+        if getattr(self, "_external_memory_bank", None) is not None and self._completed_windows >= 4:
+            for block_name, block in (("root", self.root_block), ("body", self.body_block)):
+                block.content_memory_read_view_runtime = self._external_memory_views(
+                    self._completed_windows, block_name, block
+                )
+                block.content_memory_read_view_level_runtime = getattr(self, "_external_memory_level", "slots")
+            if getattr(self, "_content_memory_read_trace_window", None) != self._completed_windows:
+                self.content_memory_audit.append({
+                    "event": "external_memory_read_window",
+                    "completed_windows": self._completed_windows,
+                    "mode": self._external_memory_mode,
+                    "recipient_ids": list(self._external_memory_recipient_ids or []),
+                    "donor_ids": list(self._external_memory_donor_ids or []),
+                    "durable_memory_checksum_before": self._content_memory_checksum(),
+                    "durable_memory_checksum_after": self._content_memory_checksum(),
+                    "attention_kv_checksum": self._attention_checksum(),
+                })
+                self._content_memory_read_trace_window = self._completed_windows
+
+        persistent = {
+            "persistent_read_permutation",
+            "semantic_mismatch_persistent_read_permutation",
+        }
+        if strategy in persistent and self._completed_windows >= 4:
+            permutation = self._ensure_content_memory_permutation()
+            for block in (self.root_block, self.body_block):
+                state = block._sequence_state
+                if state is None or not state.layers:
+                    continue
+                # Every layer reads the same sample identity mapping while
+                # retaining its own independent K=2 durable slots.
+                read_views = []
+                for layer in state.layers:
+                    if layer.persistent_memory is not None:
+                        read_views.append(layer.persistent_memory.index_select(
+                            0, permutation.to(layer.persistent_memory.device)
+                        ))
+                    else:
+                        read_views.append(None)
+                block.content_memory_read_view_runtime = read_views
+                block.content_memory_read_view_level_runtime = "slots"
+            if getattr(self, "_content_memory_read_trace_window", None) != self._completed_windows:
+                durable = self._content_memory_checksum()
+                read_digest = __import__("hashlib").sha256()
+                for block in (self.root_block, self.body_block):
+                    views = block.content_memory_read_view_runtime or []
+                    for view in views:
+                        if view is not None:
+                            read_digest.update(
+                                view.detach().float().cpu().contiguous().numpy().tobytes()
+                            )
+                mamba_digest = []
+                for block in (self.root_block, self.body_block):
+                    if block._sequence_state is not None:
+                        mamba_digest.extend(
+                            self._state_checksum(layer.mamba_state)
+                            for layer in block._sequence_state.layers
+                        )
+                self.content_memory_audit.append({
+                    "event": "persistent_read_window",
+                    "completed_windows": self._completed_windows,
+                    "permutation": permutation.detach().cpu().tolist(),
+                    "durable_memory_checksum_before": durable,
+                    "durable_memory_checksum_after": durable,
+                    "read_memory_checksum": read_digest.hexdigest(),
+                    "attention_kv_checksum": self._attention_checksum(),
+                    "mamba_state_checksum": ":".join(mamba_digest),
+                })
+                self._content_memory_read_trace_window = self._completed_windows
+
+    def _ensure_content_memory_permutation(self) -> torch.Tensor:
+        states = [
+            block._sequence_state
+            for block in (self.root_block, self.body_block)
+            if block._sequence_state is not None and block._sequence_state.layers
+        ]
+        if not states:
+            raise RuntimeError("content-memory permutation requires initialized state")
+        batch = states[0].layers[0].attention_cache.batch_size
+        device = states[0].layers[0].attention_cache.device
+        if batch <= 1:
+            raise ValueError("persistent read permutation requires batch size > 1")
+        if getattr(self, "_content_memory_permutation", None) is None:
+            self._content_memory_permutation = torch.roll(
+                torch.arange(batch, device=device), 1
+            ).long().cpu()
+        permutation = self._content_memory_permutation
+        if permutation.shape != (batch,):
+            raise ValueError(
+                f"content-memory permutation shape {tuple(permutation.shape)} != {(batch,)}"
+            )
+        if sorted(permutation.tolist()) != list(range(batch)):
+            raise ValueError("content-memory permutation must be a bijection")
+        if any(int(value) == index for index, value in enumerate(permutation.tolist())):
+            raise ValueError("content-memory permutation must be deranged")
+        return permutation.to(device)
 
     @property
     def trace(self) -> DiffusionMemoryTrace:
@@ -129,7 +339,10 @@ class ArdyDiffusionMemoryController:
             self._intervention_applied_window = None
             self.intervention_audit.clear()
             self._content_memory_permutation_applied = False
+            self._content_memory_permutation = None
+            self._content_memory_read_trace_window = None
             self.content_memory_audit.clear()
+            self.content_memory_tensor_trace.clear()
             self._set_runtime_mamba_output_scale(1.0)
             self._set_content_memory_runtime()
 
@@ -338,14 +551,15 @@ class ArdyDiffusionMemoryController:
             batch = sequence_state.layers[0].attention_cache.batch_size
             if batch <= 1:
                 raise ValueError("permute_memory requires batch size > 1")
-            permutation = torch.roll(torch.arange(batch, device=sequence_state.layers[0].attention_cache.device), 1)
+            permutation = self._ensure_content_memory_permutation()
             for layer in sequence_state.layers:
                 if layer.persistent_memory is not None:
                     layer.persistent_memory = layer.persistent_memory.index_select(0, permutation.to(layer.persistent_memory.device))
 
     def _maybe_permute_content_memory(self) -> None:
         if (
-            getattr(self, "content_memory_intervention", "normal") != "permute_memory"
+            getattr(self, "content_memory_intervention", "normal")
+            not in {"permute_memory", "one_shot_permute_plus_freeze_write"}
             or self._completed_windows < 4
             or self._content_memory_permutation_applied
         ):
@@ -438,6 +652,10 @@ class ArdyDiffusionMemoryController:
         self.periodic_reset_windows = periodic_reset_windows
         self.state_diagnostics.clear()
         self._previous_mamba_states.clear()
+
+    def configure_content_memory_tensor_trace(self, *, enabled: bool) -> None:
+        self.record_content_memory_tensors = bool(enabled)
+        self.content_memory_tensor_trace.clear()
 
     def begin_training_snapshot_capture(self, depths: list[int]) -> None:
         """Capture selected generated-prefix states for multi-depth supervision."""
@@ -586,6 +804,7 @@ class ArdyDiffusionMemoryController:
                         bool(torch.isfinite(tensor).all())
                         for tensor in self._state_tensors(mamba_state)
                     )
+                    content_diag = getattr(mixer, "last_content_memory_diagnostics", {})
                     all_finite = all_finite and finite
                     layer_records.append(
                         {
@@ -599,6 +818,14 @@ class ArdyDiffusionMemoryController:
                             "content_memory_bytes": content_memory_bytes,
                             "content_memory_norm": content_memory_norm,
                             "content_memory_read_residual_scale": content_read_scale,
+                            "content_memory_update_norm": content_diag.get("memory_update_norm"),
+                            "content_memory_write_gate_mean": content_diag.get("write_gate_mean"),
+                            "content_memory_write_gate_min": content_diag.get("write_gate_min"),
+                            "content_memory_write_gate_max": content_diag.get("write_gate_max"),
+                            "content_memory_proposal_norm": content_diag.get("content_proposal_norm"),
+                            "state_summary_norm": content_diag.get("state_summary_norm"),
+                            "state_delta_norm": content_diag.get("state_delta_norm"),
+                            "augmented_minus_base_attention_norm": content_diag.get("augmented_minus_base_attention_norm"),
                             "persistent_state_bytes": (
                                 attention_bytes + mamba_bytes + content_memory_bytes
                             ),
@@ -607,6 +834,14 @@ class ArdyDiffusionMemoryController:
                         }
                     )
                     current_states.append(self._clone_mamba_state(mamba_state))
+                    if self.record_content_memory_tensors and content_memory is not None:
+                        self.content_memory_tensor_trace.append({
+                            "event": event,
+                            "completed_windows": self._completed_windows,
+                            "block": block_name,
+                            "layer": layer_index,
+                            "slots": content_memory.detach().float().cpu().clone(),
+                        })
             record["blocks"][block_name] = layer_records
             self._previous_mamba_states[block_name] = current_states
         record["all_finite"] = all_finite
@@ -739,6 +974,12 @@ class ArdyDiffusionMemoryController:
         # forwards remain read-only, while every accepted history write uses
         # the same registered intervention.
         self._set_content_memory_runtime()
+        # External donor memory is a read-only view for noisy future-window
+        # reads. The clean accepted commit must read the recipient's durable
+        # slots so donor content cannot leak into its write proposal.
+        if getattr(self, "_external_memory_bank", None) is not None:
+            for block in (self.root_block, self.body_block):
+                block.content_memory_read_view_runtime = None
         canonical_history_prime(
             self.raw_denoiser,
             history_hybrid,

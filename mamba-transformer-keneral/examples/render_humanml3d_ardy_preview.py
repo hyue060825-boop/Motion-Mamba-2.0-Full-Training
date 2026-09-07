@@ -31,7 +31,10 @@ def main() -> int:
     args = parser.parse_args()
     if args.manifest:
         records = [json.loads(line) for line in Path(args.manifest).read_text().splitlines() if line.strip()]
-        records = [record for record in records if not record["mirror"]][args.offset:args.offset + args.samples]
+        records = [
+            record for record in records
+            if not record.get("mirror", record.get("is_mirror", False))
+        ][args.offset:args.offset + args.samples]
     else:
         records = [{"id": Path(path).stem, "motion_path": path} for path in args.motion]
     skeleton = CoreSkeleton27()

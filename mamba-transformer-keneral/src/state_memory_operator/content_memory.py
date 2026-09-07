@@ -157,6 +157,14 @@ class PersistentContentMemory(nn.Module):
             return F.layer_norm(slots.float(), (self.d_model,)).to(slots.dtype)
         return slots
 
+    def validate_read_ready(self, value: torch.Tensor) -> torch.Tensor:
+        """Validate an already resolved memory tensor without transforming it."""
+        if value.ndim != 3 or value.shape[-2:] != (self.slots, self.d_model):
+            raise ValueError(
+                f"read-ready memory must have shape [B,{self.slots},{self.d_model}]"
+            )
+        return value
+
     def reset(self, slots: torch.Tensor, reset_mask: torch.Tensor | None = None) -> torch.Tensor:
         if reset_mask is None:
             return torch.zeros_like(slots)

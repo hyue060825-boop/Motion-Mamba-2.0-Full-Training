@@ -57,3 +57,20 @@ def test_checkpoint_content_parameters_cannot_be_silently_disabled():
     }
     with pytest.raises(ValueError, match="disagrees"):
         sequence_config_kwargs(Namespace(**fields), checkpoint)
+
+
+def test_memory_only_checkpoint_is_recovered_without_query_interaction():
+    checkpoint = {
+        "root_model": {"layers.0.content_memory.read_gate": torch.zeros(())},
+        "metrics": {
+            "token_state_interaction": "naive_gated_add",
+            "state_aware_output_mode": "attention_only",
+            "content_memory_enabled": True,
+            "content_memory_slots": 2,
+        },
+    }
+    resolved, audit = sequence_config_kwargs(Namespace(**_FIELDS), checkpoint)
+    assert resolved["token_state_interaction"] == "naive_gated_add"
+    assert resolved["state_aware_output_mode"] == "attention_only"
+    assert resolved["content_memory_enabled"] is True
+    assert audit["source"]["token_state_interaction"] == "checkpoint"

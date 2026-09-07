@@ -141,6 +141,36 @@ def _open_memory_gates(kernel: SequenceKernel) -> None:
         kernel.content_memory.read_gate.fill_(12.0)
 
 
+def test_memory_only_ablation_projects_state_without_query_interaction():
+    mamba = _FakeMamba(8)
+    kernel = SequenceKernel(
+        SequenceKernelConfig(
+            mode="hybrid",
+            attention=MinimalAttentionKernelConfig(
+                d_model=8,
+                num_heads=2,
+                window_size_chunks=2,
+                attention_backend="sdpa",
+                num_sink_tokens=1,
+            ),
+            interaction="naive_gated_add",
+            state_summary_dim=4,
+            content_memory_enabled=True,
+            content_memory_slots=2,
+        ),
+        mamba3=mamba,
+        mamba_wrapper=_FakeMambaWrapper(mamba),
+        state_projector=nn.Linear(8, 4),
+    )
+    assert not kernel.uses_token_state_interaction
+    assert kernel.uses_state_summary
+    state = kernel.init_state(batch_size=2)
+    assert state.state_summary is not None
+    _, pending, _ = kernel.forward_chunk(torch.randn(2, 3, 8), state=state)
+    assert pending.state_summary is not None
+    assert pending.persistent_memory is not None
+
+
 def test_noisy_forward_is_read_only_and_accepted_pending_commits_once():
     kernel = _kernel()
     _open_memory_gates(kernel)
@@ -185,6 +215,23 @@ def test_content_memory_write_and_read_interventions_are_explicit():
     assert not torch.equal(read_on, read_off)
     assert on_aux["persistent_content_memory"]["read_enabled"] is True
     assert off_aux["persistent_content_memory"]["read_enabled"] is False
+
+
+def test_persistent_read_view_changes_output_not_durable_write_proposal():
+    kernel = _kernel()
+    _open_memory_gates(kernel)
+    state = kernel.init_state(batch_size=2)
+    x = torch.randn(2, 3, 8)
+    _, seed, _ = kernel.forward_chunk(x, state=state)
+    kernel.commit(state, seed, chunk_id=0)
+    durable = state.persistent_memory.clone()
+    normal_output, normal_pending, _ = kernel.forward_chunk(x, state=state)
+    swapped_output, swapped_pending, _ = kernel.forward_chunk(
+        x, state=state, content_memory_read_view=durable.roll(1, dims=0)
+    )
+    assert not torch.equal(normal_output, swapped_output)
+    torch.testing.assert_close(normal_pending.persistent_memory, swapped_pending.persistent_memory)
+    torch.testing.assert_close(state.persistent_memory, durable)
 
 
 def test_d_no_delta_zeroes_only_content_write_delta():
