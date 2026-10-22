@@ -1,0 +1,10 @@
+{
+  "project": "Motion Mamba 2.0",
+  "release_source_verified": true,
+  "validation": "docs/release_validation.json",
+  "source_hashes": "SOURCE_SHA256.json",
+  "provenance": "docs/source_provenance.json",
+  "large_data_checkpoints_in_git": false,
+  "original_experiments_unchanged": true,
+  "not_a_full_training_reproduction_claim": true
+}

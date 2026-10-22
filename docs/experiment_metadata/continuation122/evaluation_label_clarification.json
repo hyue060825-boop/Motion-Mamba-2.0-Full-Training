@@ -1,0 +1,8 @@
+{
+  "internal_legacy_tag_baseline100k_is_current_parent117k": true,
+  "authoritative_parent": "artifact://checkpoint5000_pt_3ecb96b6d8",
+  "candidate_at_stage5000_is_117000": true,
+  "candidate_at_stage10000_is_122000": true,
+  "controlled_evaluation_labels_native117_and_native122_are_correct": true,
+  "raw_artifacts_not_rewritten": true
+}

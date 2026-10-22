@@ -1,0 +1,29 @@
+{
+  "parent": "artifact://checkpoint5000_pt_6ac426c0a8",
+  "updates": 5000,
+  "actual_start": 105000,
+  "actual_target": 110000,
+  "devices": [
+    0,
+    1,
+    2,
+    3
+  ],
+  "full_state_continuation": true,
+  "protocol": "identical original117k recipe",
+  "evaluation_finished": "artifact://status_json_a748643acf",
+  "refresh_stage_steps": [
+    5000,
+    6000,
+    7500
+  ],
+  "save_stage_steps": [
+    5010,
+    6000,
+    7500,
+    10000
+  ],
+  "no_new_objective_or_thresholds": true,
+  "all_checkpoints_retained": true,
+  "online_not_replaced": true
+}

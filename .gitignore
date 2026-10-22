@@ -1,29 +1,33 @@
-# Python and test caches
 __pycache__/
 *.py[cod]
 .pytest_cache/
-.mypy_cache/
-.ruff_cache/
-.cache/
-
-# Runtime and experiment caches
-runtime/tmp/
-**/wandb/
-**/checkpoints/
-**/results/
-*.log
-
-# Large model and training artifacts
-*.ckpt
-*.pt
-*.pth
-*.safetensors
-*.onnx
-
-# Local environments and editor files
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+workspace/
+outputs/
+logs/
 .env
 .env.*
-.venv/
-node_modules/
-.DS_Store
+*.pem
+*.key
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.trt
+*.so
+*.zip
+*.mp4
+*.log
+*.lock
+artifacts.local.json
+!checkpoints/manifest.json
 
+/evaluation/paired_text/*/models/
+/evaluation/paired_text/*/scoring/
+/evaluation/paired_text/*/delivery/
+/evaluation/paired_text/*/*.npy
+/evaluation/paired_text/*/*.npz

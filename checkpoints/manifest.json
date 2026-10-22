@@ -1,0 +1,125 @@
+{
+  "selected": [
+    {
+      "model": "motion_mamba2_100k",
+      "actual_step": 100000,
+      "path": "selected/motion_mamba2_100k/checkpoint100000.pt",
+      "bytes": 4570176225,
+      "sha256": "d21b9a22616fcfa2244629d1d4176a6de0c4f567cc5c69022458321afea0c9ca",
+      "hash_status": "bound_to_independently_verified_evaluation_registry; file size/mtime rechecked",
+      "diagnostic": false
+    },
+    {
+      "model": "motion_mamba2_110k",
+      "actual_step": 110000,
+      "path": "selected/motion_mamba2_110k/checkpoint110000.pt",
+      "bytes": 4570123881,
+      "sha256": "6ab6a548404a8cb0f03c218d1038ed9f3d9bc199564677a857b50d7be9bb0302",
+      "hash_status": "bound_to_independently_verified_evaluation_registry; file size/mtime rechecked",
+      "diagnostic": false
+    },
+    {
+      "model": "motion_mamba2_117k",
+      "actual_step": 117000,
+      "path": "selected/motion_mamba2_117k/checkpoint117000.pt",
+      "bytes": 4570178548,
+      "sha256": "2e828449addff3aa079387f319589cf4ac9b202c48577278a6d274f28b14f679",
+      "hash_status": "bound_to_independently_verified_evaluation_registry; file size/mtime rechecked",
+      "diagnostic": false
+    },
+    {
+      "model": "motion_mamba2_122k",
+      "actual_step": 122000,
+      "path": "selected/motion_mamba2_122k/checkpoint122000.pt",
+      "bytes": 4570180257,
+      "sha256": "0ae6ff8dd80ea4569c63302b844e79bca41a19d3e153beb8d3693e8ae6fde53b",
+      "hash_status": "bound_to_independently_verified_evaluation_registry; file size/mtime rechecked",
+      "diagnostic": false
+    },
+    {
+      "model": "cmdm100k",
+      "actual_step": 100000,
+      "path": "selected/cmdm100k/checkpoint100000.pt",
+      "bytes": 506628646,
+      "sha256": "6ee5ef81eb3d42fa4cf1cb556c13d1830fbfca5486f9afc628d9352631322781",
+      "hash_status": "bound_to_independently_verified_evaluation_registry; file size/mtime rechecked",
+      "diagnostic": false
+    },
+    {
+      "model": "motionstreamer100k",
+      "actual_step": 100000,
+      "path": "selected/motionstreamer100k/checkpoint100000.pt",
+      "bytes": 2976130758,
+      "sha256": "cda3bdaccd1f41ac1e34701826809af7bf9b7d267a0174b6e1f902444ffb4f16",
+      "hash_status": "bound_to_independently_verified_evaluation_registry; file size/mtime rechecked",
+      "diagnostic": false
+    },
+    {
+      "model": "fd2100k",
+      "actual_step": 100000,
+      "path": "selected/fd2100k/checkpoint100000.pt",
+      "bytes": 1409318994,
+      "sha256": "2b6e3684769ab4d3a6158482cfe1afe28fa75c5a65e11fd9cef18474d6762b2c",
+      "hash_status": "bound_to_independently_verified_evaluation_registry; file size/mtime rechecked",
+      "diagnostic": false
+    },
+    {
+      "model": "omg100k",
+      "actual_step": 100000,
+      "path": "selected/omg100k/checkpoint100000.pt",
+      "bytes": 4028959438,
+      "sha256": "7b7c4513e8b8809aba9b485126dd2c89bda0e2c26d82c29503791dc3291710cf",
+      "hash_status": "bound_to_independently_verified_evaluation_registry; file size/mtime rechecked",
+      "diagnostic": false
+    },
+    {
+      "model": "dart100k",
+      "actual_step": 100000,
+      "path": "selected/dart100k/checkpoint100000.pt",
+      "bytes": 1387465520,
+      "sha256": "3536e41b6802d848354268f33709e36415fc899cf770b76078d664ab04196549",
+      "hash_status": "bound_to_independently_verified_evaluation_registry; file size/mtime rechecked",
+      "diagnostic": false
+    },
+    {
+      "model": "transformer_reference100k_diagnostic",
+      "actual_step": 100000,
+      "path": "selected/transformer_reference100k_diagnostic/checkpoint100000.pt",
+      "bytes": 1895474197,
+      "sha256": "723e251a145461d379fc69f315f976431667fc2d8092c9d4f5f9f35c5817dd98",
+      "hash_status": "bound_to_independently_verified_evaluation_registry; file size/mtime rechecked",
+      "diagnostic": true
+    },
+    {
+      "model": "dip100k",
+      "actual_step": 100000,
+      "path": "selected/dip100k/checkpoint100000.pt",
+      "bytes": 367049837,
+      "sha256": "1daa455137f8e675305f42b34715374754521bed12560afa1a7e8ebb15103a84",
+      "hash_status": "bound_to_independently_verified_evaluation_registry; file size/mtime rechecked",
+      "diagnostic": true
+    },
+    {
+      "model": "motion_mamba2_minimal100k",
+      "actual_step": 100000,
+      "path": "selected/motion_mamba2_minimal100k/checkpoint100000.pt",
+      "bytes": 3104712310,
+      "sha256": "786535d98daecdf45aeafe5ca42fd6423ea0f99adb45159afde2cc6a52abbb91",
+      "hash_status": "bound_to_independently_verified_evaluation_registry; file size/mtime rechecked",
+      "diagnostic": false
+    },
+    {
+      "model": "motionmamba100k",
+      "actual_step": 100000,
+      "path": "selected/motionmamba100k/checkpoint100000.pt",
+      "bytes": 202734438,
+      "sha256": "c0d483f2e576f6187dce733e21b76d9428bf86b4c07e856208e4cd4c31d11d67",
+      "hash_status": "bound_to_independently_verified_evaluation_registry; file size/mtime rechecked",
+      "diagnostic": false
+    }
+  ],
+  "all_experiment_save_count": 448,
+  "large_files_committed": false,
+  "server_organization": "External checkpoint workspace; see README.MD",
+  "third_party_pretrained_weights_excluded": true
+}

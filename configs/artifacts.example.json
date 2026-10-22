@@ -1,0 +1,814 @@
+{
+  "bones_seed_motion_mamba2_train_3c9f3e1238": {
+    "path": "${MM2_WORKSPACE}/artifacts/bones_seed_motion_mamba2_train_3c9f3e1238",
+    "required_external": true
+  },
+  "gr00t-wholebodycontrol_cb55417b96": {
+    "path": "${MM2_WORKSPACE}/artifacts/gr00t-wholebodycontrol_cb55417b96",
+    "required_external": true
+  },
+  "motionmamba2_0_c0734a96c2": {
+    "path": "${MM2_WORKSPACE}/artifacts/motionmamba2_0_c0734a96c2",
+    "required_external": true
+  },
+  "bones_seed_15afdc5c05": {
+    "path": "${MM2_WORKSPACE}/artifacts/bones_seed_15afdc5c05",
+    "required_external": true
+  },
+  "hiphi_3cd1f7d9fe": {
+    "path": "${MM2_WORKSPACE}/artifacts/hiphi_3cd1f7d9fe",
+    "required_external": true
+  },
+  "humanml3d_15ea925f41": {
+    "path": "${MM2_WORKSPACE}/artifacts/humanml3d_15ea925f41",
+    "required_external": true
+  },
+  "g1_e56ca95c68": {
+    "path": "${MM2_WORKSPACE}/artifacts/g1_e56ca95c68",
+    "required_external": true
+  },
+  "result_d22902d183": {
+    "path": "${MM2_WORKSPACE}/artifacts/result_d22902d183",
+    "required_external": true
+  },
+  "hub_27e995e390": {
+    "path": "${MM2_WORKSPACE}/artifacts/hub_27e995e390",
+    "required_external": true
+  },
+  "g1_py_9291fdfac6": {
+    "path": "${MM2_WORKSPACE}/artifacts/g1_py_9291fdfac6",
+    "required_external": true
+  },
+  "9_17-_md_65267f5053": {
+    "path": "${MM2_WORKSPACE}/artifacts/9_17-_md_65267f5053",
+    "required_external": true
+  },
+  "huggingface_ed9ba7d805": {
+    "path": "${MM2_WORKSPACE}/artifacts/huggingface_ed9ba7d805",
+    "required_external": true
+  },
+  "state-spaces-mamba_fd8479ca04": {
+    "path": "${MM2_REPOSITORY}/third_party/mamba",
+    "required_external": false
+  },
+  "mamba_op_triton_3220f2c818": {
+    "path": "${MM2_WORKSPACE}/artifacts/mamba_op_triton_3220f2c818",
+    "required_external": true
+  },
+  "texts_d59bd5bfcc": {
+    "path": "${MM2_WORKSPACE}/artifacts/texts_d59bd5bfcc",
+    "required_external": true
+  },
+  "evaluator_native_v2_cc741fa946": {
+    "path": "${MM2_WORKSPACE}/artifacts/evaluator_native_v2_cc741fa946",
+    "required_external": true
+  },
+  "mamba-transformer-keneral_64d2519211": {
+    "path": "${MM2_WORKSPACE}/artifacts/mamba-transformer-keneral_64d2519211",
+    "required_external": true
+  },
+  "g1_fusion_20260915_e24ce84db0": {
+    "path": "${MM2_WORKSPACE}/artifacts/g1_fusion_20260915_e24ce84db0",
+    "required_external": true
+  },
+  "g1_startpoint_and_learning_execution_20261004_d886325d67": {
+    "path": "${MM2_WORKSPACE}/artifacts/g1_startpoint_and_learning_execution_20261004_d886325d67",
+    "required_external": true
+  },
+  "data_index_jsonl_9966c1bc60": {
+    "path": "${MM2_WORKSPACE}/artifacts/data_index_jsonl_9966c1bc60",
+    "required_external": true
+  },
+  "t5-3b_6e94c7579f": {
+    "path": "${MM2_WORKSPACE}/artifacts/t5-3b_6e94c7579f",
+    "required_external": true
+  },
+  "evaluator_asset_manifest_json_c38780c4a2": {
+    "path": "${MM2_WORKSPACE}/artifacts/evaluator_asset_manifest_json_c38780c4a2",
+    "required_external": true
+  },
+  "evaluator_native_67895f3cd5": {
+    "path": "${MM2_WORKSPACE}/artifacts/evaluator_native_67895f3cd5",
+    "required_external": true
+  },
+  "t5_metadata_json_affff26ef5": {
+    "path": "${MM2_WORKSPACE}/artifacts/t5_metadata_json_affff26ef5",
+    "required_external": true
+  },
+  "imported_generator_smoke_jsonl_52833b3b01": {
+    "path": "${MM2_WORKSPACE}/artifacts/imported_generator_smoke_jsonl_52833b3b01",
+    "required_external": true
+  },
+  "config_json_8d4866da1a": {
+    "path": "${MM2_WORKSPACE}/artifacts/config_json_8d4866da1a",
+    "required_external": true
+  },
+  "model_py_916e1b8896": {
+    "path": "${MM2_WORKSPACE}/artifacts/model_py_916e1b8896",
+    "required_external": true
+  },
+  "evaluator_native_5eb8b43389": {
+    "path": "${MM2_WORKSPACE}/artifacts/evaluator_native_5eb8b43389",
+    "required_external": true
+  },
+  "eval_contract_json_be08a2ae73": {
+    "path": "${MM2_WORKSPACE}/artifacts/eval_contract_json_be08a2ae73",
+    "required_external": true
+  },
+  "python_-m_native_eval_prepare_ee68e2ba2d": {
+    "path": "${MM2_WORKSPACE}/artifacts/python_-m_native_eval_prepare_ee68e2ba2d",
+    "required_external": true
+  },
+  "python_-m_native_eval_score__f94396cb6d": {
+    "path": "${MM2_WORKSPACE}/artifacts/python_-m_native_eval_score__f94396cb6d",
+    "required_external": true
+  },
+  "gpu_budget_json_44a0332f70": {
+    "path": "${MM2_WORKSPACE}/artifacts/gpu_budget_json_44a0332f70",
+    "required_external": true
+  },
+  "unified_interactive_easy_v3_hiphi_20261021_32d9db1045": {
+    "path": "${MM2_REPOSITORY}/evaluation/paired_text/shared",
+    "required_external": false
+  },
+  "manifests_8245329bf1": {
+    "path": "${MM2_WORKSPACE}/artifacts/manifests_8245329bf1",
+    "required_external": true
+  },
+  "execute_py_308d54e9f2": {
+    "path": "${MM2_REPOSITORY}/evaluation/motionmamba_loader/execute.py",
+    "required_external": false
+  },
+  "bones-g1-native-v2_adcc182e95": {
+    "path": "${MM2_WORKSPACE}/artifacts/bones-g1-native-v2_adcc182e95",
+    "required_external": true
+  },
+  "hiphi_window_head_de5d446e81": {
+    "path": "${MM2_WORKSPACE}/artifacts/hiphi_window_head_de5d446e81",
+    "required_external": true
+  },
+  "_runtime_924bb4d0b9": {
+    "path": "${MM2_REPOSITORY}/src/motion_mamba2/runtime",
+    "required_external": false
+  },
+  "accepted_val_jsonl_bf609ce99f": {
+    "path": "${MM2_WORKSPACE}/artifacts/accepted_val_jsonl_bf609ce99f",
+    "required_external": true
+  },
+  "src_40b98bd860": {
+    "path": "${MM2_WORKSPACE}/artifacts/src_40b98bd860",
+    "required_external": true
+  },
+  "data_3f74c56171": {
+    "path": "${MM2_WORKSPACE}/artifacts/data_3f74c56171",
+    "required_external": true
+  },
+  "unified_interactive_easy_v3_20261021_ebde76396c": {
+    "path": "${MM2_REPOSITORY}/evaluation/paired_text/original_humanml3d_requests",
+    "required_external": false
+  },
+  "unified_interactive_pairedtext_v4_hiphi_20261022_f5ae94cd0b": {
+    "path": "${MM2_REPOSITORY}/evaluation/paired_text/hiphi",
+    "required_external": false
+  },
+  "adapters_640849c956": {
+    "path": "${MM2_WORKSPACE}/artifacts/adapters_640849c956",
+    "required_external": true
+  },
+  "humanml3d-g1-native-v2_65063e489a": {
+    "path": "${MM2_WORKSPACE}/artifacts/humanml3d-g1-native-v2_65063e489a",
+    "required_external": true
+  },
+  "seed2903_b7f176163d": {
+    "path": "${MM2_WORKSPACE}/artifacts/seed2903_b7f176163d",
+    "required_external": true
+  },
+  "omg-1f2aebd58532631c48b9a09a1580d2bf2c5afd14_b2e3cf58ff": {
+    "path": "${MM2_WORKSPACE}/artifacts/omg-1f2aebd58532631c48b9a09a1580d2bf2c5afd14_b2e3cf58ff",
+    "required_external": true
+  },
+  "evaluator_4d6026af1f": {
+    "path": "${MM2_WORKSPACE}/artifacts/evaluator_4d6026af1f",
+    "required_external": true
+  },
+  "motion-diffusion-model-eval_6cdb725096": {
+    "path": "${MM2_WORKSPACE}/artifacts/motion-diffusion-model-eval_6cdb725096",
+    "required_external": true
+  },
+  "humanml3d_f45817e056": {
+    "path": "${MM2_WORKSPACE}/artifacts/humanml3d_f45817e056",
+    "required_external": true
+  },
+  "scene_29dof_xml_b80ed52e2a": {
+    "path": "${MM2_WORKSPACE}/artifacts/scene_29dof_xml_b80ed52e2a",
+    "required_external": true
+  },
+  "g1_loss_alignment_execution_20261003_18bc1c19fb": {
+    "path": "${MM2_WORKSPACE}/artifacts/g1_loss_alignment_execution_20261003_18bc1c19fb",
+    "required_external": true
+  },
+  "g1_foundation_fusion_execution_20261002_06a1326b5c": {
+    "path": "${MM2_WORKSPACE}/artifacts/g1_foundation_fusion_execution_20261002_06a1326b5c",
+    "required_external": true
+  },
+  "g1_joint_interaction_training_20261001_705c958a29": {
+    "path": "${MM2_WORKSPACE}/artifacts/g1_joint_interaction_training_20261001_705c958a29",
+    "required_external": true
+  },
+  "zts_b4e1ceb99f": {
+    "path": "${MM2_WORKSPACE}/artifacts/zts_b4e1ceb99f",
+    "required_external": true
+  },
+  "checkpoint_step_050000_pt_24e197c399": {
+    "path": "${MM2_WORKSPACE}/artifacts/checkpoint_step_050000_pt_24e197c399",
+    "required_external": true
+  },
+  "paired_loss_py_2d69da1d1c": {
+    "path": "${MM2_WORKSPACE}/artifacts/paired_loss_py_2d69da1d1c",
+    "required_external": true
+  },
+  "pool_json_7d60a07efa": {
+    "path": "${MM2_WORKSPACE}/artifacts/pool_json_7d60a07efa",
+    "required_external": true
+  },
+  "g1_native112k_future_interaction_20261011_d06c37e3c2": {
+    "path": "${MM2_REPOSITORY}/training/recipes/interaction117",
+    "required_external": false
+  },
+  "g1_native100k_original117k_protocol_20261014_dbcf4a1353": {
+    "path": "${MM2_WORKSPACE}/artifacts/g1_native100k_original117k_protocol_20261014_dbcf4a1353",
+    "required_external": true
+  },
+  "batch512_after75k_20261007_c710d5b650": {
+    "path": "${MM2_REPOSITORY}/training/recipes/foundation512",
+    "required_external": false
+  },
+  "python_9f8003379b": {
+    "path": "${MM2_WORKSPACE}/artifacts/python_9f8003379b",
+    "required_external": true
+  },
+  "checkpoint5000_pt_0be2f0dae9": {
+    "path": "${MM2_WORKSPACE}/artifacts/checkpoint5000_pt_0be2f0dae9",
+    "required_external": true
+  },
+  "engine_6fc02cd60c": {
+    "path": "${MM2_WORKSPACE}/artifacts/engine_6fc02cd60c",
+    "required_external": true
+  },
+  "controller_py_54c4155977": {
+    "path": "${MM2_WORKSPACE}/artifacts/controller_py_54c4155977",
+    "required_external": true
+  },
+  "native122k_controlled_endpoint_20261018_9d1c42d4fe": {
+    "path": "${MM2_WORKSPACE}/artifacts/native122k_controlled_endpoint_20261018_9d1c42d4fe",
+    "required_external": true
+  },
+  "horizon_controlled_four_models_20261017_132d28341d": {
+    "path": "${MM2_WORKSPACE}/artifacts/horizon_controlled_four_models_20261017_132d28341d",
+    "required_external": true
+  },
+  "_native117k_continue8gpu_lock_c35eb6d47f": {
+    "path": "${MM2_WORKSPACE}/artifacts/_native117k_continue8gpu_lock_c35eb6d47f",
+    "required_external": true
+  },
+  "g1_native117k_continue5k_8gpu_20261018_bef070b7cc": {
+    "path": "${MM2_REPOSITORY}/training/recipes/continuation122",
+    "required_external": false
+  },
+  "native100k_controlled_endpoint_20261017_4c3b70479f": {
+    "path": "${MM2_WORKSPACE}/artifacts/native100k_controlled_endpoint_20261017_4c3b70479f",
+    "required_external": true
+  },
+  "stats_a5227494f3": {
+    "path": "${MM2_WORKSPACE}/artifacts/stats_a5227494f3",
+    "required_external": true
+  },
+  "g1_fusion_batched_pretrain_20261006_4bab227953": {
+    "path": "${MM2_REPOSITORY}/training/recipes/foundation32",
+    "required_external": false
+  },
+  "old_c1509953a8": {
+    "path": "${MM2_WORKSPACE}/artifacts/old_c1509953a8",
+    "required_external": true
+  },
+  "new20k_ff7914f07b": {
+    "path": "${MM2_WORKSPACE}/artifacts/new20k_ff7914f07b",
+    "required_external": true
+  },
+  "load_evaluate_json_f47ed93cda": {
+    "path": "${MM2_WORKSPACE}/artifacts/load_evaluate_json_f47ed93cda",
+    "required_external": true
+  },
+  "old_json_9aee84d268": {
+    "path": "${MM2_WORKSPACE}/artifacts/old_json_9aee84d268",
+    "required_external": true
+  },
+  "manifest_json_d6a24ce639": {
+    "path": "${MM2_WORKSPACE}/artifacts/manifest_json_d6a24ce639",
+    "required_external": true
+  },
+  "checkpoint_step_050000_pt_697f95b41d": {
+    "path": "${MM2_WORKSPACE}/artifacts/checkpoint_step_050000_pt_697f95b41d",
+    "required_external": true
+  },
+  "joint_limits_json_6998748a01": {
+    "path": "${MM2_WORKSPACE}/artifacts/joint_limits_json_6998748a01",
+    "required_external": true
+  },
+  "resource_switch_py_1511f7818c": {
+    "path": "${MM2_WORKSPACE}/artifacts/resource_switch_py_1511f7818c",
+    "required_external": true
+  },
+  "bones_seed_text_cache_llm2vec_b33795dc93": {
+    "path": "${MM2_WORKSPACE}/artifacts/bones_seed_text_cache_llm2vec_b33795dc93",
+    "required_external": true
+  },
+  "manifest_jsonl_f4658994ef": {
+    "path": "${MM2_WORKSPACE}/artifacts/manifest_jsonl_f4658994ef",
+    "required_external": true
+  },
+  "manifest_jsonl_f0d755d2f3": {
+    "path": "${MM2_WORKSPACE}/artifacts/manifest_jsonl_f0d755d2f3",
+    "required_external": true
+  },
+  "pretrain_26cb6e4016": {
+    "path": "${MM2_WORKSPACE}/artifacts/pretrain_26cb6e4016",
+    "required_external": true
+  },
+  "checkpoint_step_000200_pt_ac3f25b384": {
+    "path": "${MM2_WORKSPACE}/artifacts/checkpoint_step_000200_pt_ac3f25b384",
+    "required_external": true
+  },
+  "checkpoint75000_pt_48db5cf600": {
+    "path": "${MM2_WORKSPACE}/artifacts/checkpoint75000_pt_48db5cf600",
+    "required_external": true
+  },
+  "data_exclusions_json_cea79e86ab": {
+    "path": "${MM2_WORKSPACE}/artifacts/data_exclusions_json_cea79e86ab",
+    "required_external": true
+  },
+  "text_2814eb077d": {
+    "path": "${MM2_WORKSPACE}/artifacts/text_2814eb077d",
+    "required_external": true
+  },
+  "text_ffb4893fa0": {
+    "path": "${MM2_WORKSPACE}/artifacts/text_ffb4893fa0",
+    "required_external": true
+  },
+  "text_ab6b18a477": {
+    "path": "${MM2_WORKSPACE}/artifacts/text_ab6b18a477",
+    "required_external": true
+  },
+  "text_c67999f84c": {
+    "path": "${MM2_WORKSPACE}/artifacts/text_c67999f84c",
+    "required_external": true
+  },
+  "text_4e49f7c373": {
+    "path": "${MM2_WORKSPACE}/artifacts/text_4e49f7c373",
+    "required_external": true
+  },
+  "text_4b22881cd0": {
+    "path": "${MM2_WORKSPACE}/artifacts/text_4b22881cd0",
+    "required_external": true
+  },
+  "text_4370eccad8": {
+    "path": "${MM2_WORKSPACE}/artifacts/text_4370eccad8",
+    "required_external": true
+  },
+  "text_c1198ae4ae": {
+    "path": "${MM2_WORKSPACE}/artifacts/text_c1198ae4ae",
+    "required_external": true
+  },
+  "budget_8fa127551e": {
+    "path": "${MM2_WORKSPACE}/artifacts/budget_8fa127551e",
+    "required_external": true
+  },
+  "result_json_2d77398ea7": {
+    "path": "${MM2_WORKSPACE}/artifacts/result_json_2d77398ea7",
+    "required_external": true
+  },
+  "gate_json_cad651b776": {
+    "path": "${MM2_WORKSPACE}/artifacts/gate_json_cad651b776",
+    "required_external": true
+  },
+  "manifest_template_json_cf2d1f3647": {
+    "path": "${MM2_WORKSPACE}/artifacts/manifest_template_json_cf2d1f3647",
+    "required_external": true
+  },
+  "boundary_request_json_744b3870cd": {
+    "path": "${MM2_WORKSPACE}/artifacts/boundary_request_json_744b3870cd",
+    "required_external": true
+  },
+  "checkpoint5000_pt_6ac426c0a8": {
+    "path": "${MM2_WORKSPACE}/artifacts/checkpoint5000_pt_6ac426c0a8",
+    "required_external": true
+  },
+  "budget_9303d3acb9": {
+    "path": "${MM2_WORKSPACE}/artifacts/budget_9303d3acb9",
+    "required_external": true
+  },
+  "no_collection_graph_admission_json_e0a07fc911": {
+    "path": "${MM2_WORKSPACE}/artifacts/no_collection_graph_admission_json_e0a07fc911",
+    "required_external": true
+  },
+  "manifest_template_json_e9eb9b16e9": {
+    "path": "${MM2_WORKSPACE}/artifacts/manifest_template_json_e9eb9b16e9",
+    "required_external": true
+  },
+  "boundary_request_json_56c827b890": {
+    "path": "${MM2_WORKSPACE}/artifacts/boundary_request_json_56c827b890",
+    "required_external": true
+  },
+  "checkpoint2000_pt_55b42fdbe6": {
+    "path": "${MM2_WORKSPACE}/artifacts/checkpoint2000_pt_55b42fdbe6",
+    "required_external": true
+  },
+  "budget_0d8ee85089": {
+    "path": "${MM2_WORKSPACE}/artifacts/budget_0d8ee85089",
+    "required_external": true
+  },
+  "no_collection_graph_admission_json_1c4e719fb0": {
+    "path": "${MM2_WORKSPACE}/artifacts/no_collection_graph_admission_json_1c4e719fb0",
+    "required_external": true
+  },
+  "manifest_template_json_3b19bf668e": {
+    "path": "${MM2_WORKSPACE}/artifacts/manifest_template_json_3b19bf668e",
+    "required_external": true
+  },
+  "boundary_request_json_2bac565537": {
+    "path": "${MM2_WORKSPACE}/artifacts/boundary_request_json_2bac565537",
+    "required_external": true
+  },
+  "checkpoint0_pt_17f1a13e6b": {
+    "path": "${MM2_WORKSPACE}/artifacts/checkpoint0_pt_17f1a13e6b",
+    "required_external": true
+  },
+  "budget_0fa5e99d04": {
+    "path": "${MM2_WORKSPACE}/artifacts/budget_0fa5e99d04",
+    "required_external": true
+  },
+  "checkpoint5000_pt_3ecb96b6d8": {
+    "path": "${MM2_WORKSPACE}/artifacts/checkpoint5000_pt_3ecb96b6d8",
+    "required_external": true
+  },
+  "budget_428e61320c": {
+    "path": "${MM2_WORKSPACE}/artifacts/budget_428e61320c",
+    "required_external": true
+  },
+  "no_collection_graph_admission_json_714a031117": {
+    "path": "${MM2_WORKSPACE}/artifacts/no_collection_graph_admission_json_714a031117",
+    "required_external": true
+  },
+  "manifest_template_json_53a30cacca": {
+    "path": "${MM2_WORKSPACE}/artifacts/manifest_template_json_53a30cacca",
+    "required_external": true
+  },
+  "boundary_request_json_4c0d38571b": {
+    "path": "${MM2_WORKSPACE}/artifacts/boundary_request_json_4c0d38571b",
+    "required_external": true
+  },
+  "continuation_registration_json_c9b0ca8a2e": {
+    "path": "${MM2_WORKSPACE}/artifacts/continuation_registration_json_c9b0ca8a2e",
+    "required_external": true
+  },
+  "continuation_registration_json_9309bfd895": {
+    "path": "${MM2_WORKSPACE}/artifacts/continuation_registration_json_9309bfd895",
+    "required_external": true
+  },
+  "status_json_a748643acf": {
+    "path": "${MM2_WORKSPACE}/artifacts/status_json_a748643acf",
+    "required_external": true
+  },
+  "humanml3d_section1_20261020_c1c76adb30": {
+    "path": "${MM2_REPOSITORY}/evaluation/comparison_loaders",
+    "required_external": false
+  },
+  "g1_external_matched100k_20261019_f77433d79c": {
+    "path": "${MM2_WORKSPACE}/artifacts/g1_external_matched100k_20261019_f77433d79c",
+    "required_external": true
+  },
+  "g1_external_matched100k_batch2_20261019_068631a7db": {
+    "path": "${MM2_WORKSPACE}/artifacts/g1_external_matched100k_batch2_20261019_068631a7db",
+    "required_external": true
+  },
+  "g1_external_matched100k_batch3_20261020_6bfe8d540c": {
+    "path": "${MM2_WORKSPACE}/artifacts/g1_external_matched100k_batch3_20261020_6bfe8d540c",
+    "required_external": true
+  },
+  "checkpoints_json_798bfdca7e": {
+    "path": "${MM2_WORKSPACE}/artifacts/checkpoints_json_798bfdca7e",
+    "required_external": true
+  },
+  "checkpoint_loader_py_a84a0d02ec": {
+    "path": "${MM2_WORKSPACE}/artifacts/checkpoint_loader_py_a84a0d02ec",
+    "required_external": true
+  },
+  "section1_masked_kernel_repair_20261020_47cd64f873": {
+    "path": "${MM2_REPOSITORY}/evaluation/masked_graph",
+    "required_external": false
+  },
+  "stationary_short_qualification_v2_444fcfd331": {
+    "path": "${MM2_WORKSPACE}/artifacts/stationary_short_qualification_v2_444fcfd331",
+    "required_external": true
+  },
+  "accepted_test_jsonl_5d9e5407c8": {
+    "path": "${MM2_WORKSPACE}/artifacts/accepted_test_jsonl_5d9e5407c8",
+    "required_external": true
+  },
+  "retrieval_pt_80b650c4de": {
+    "path": "${MM2_WORKSPACE}/artifacts/retrieval_pt_80b650c4de",
+    "required_external": true
+  },
+  "section1_kernel_eval_20261019_413f78d9f5": {
+    "path": "${MM2_WORKSPACE}/artifacts/section1_kernel_eval_20261019_413f78d9f5",
+    "required_external": true
+  },
+  "section1_fd2_omg100k_evaluation_20261020_27619e5184": {
+    "path": "${MM2_WORKSPACE}/artifacts/section1_fd2_omg100k_evaluation_20261020_27619e5184",
+    "required_external": true
+  },
+  "evaluator_native_v2_a933d7fb8b": {
+    "path": "${MM2_WORKSPACE}/artifacts/evaluator_native_v2_a933d7fb8b",
+    "required_external": true
+  },
+  "_runtime_8df4cd05cf": {
+    "path": "${MM2_WORKSPACE}/artifacts/_runtime_8df4cd05cf",
+    "required_external": true
+  },
+  "evaluator_6923422114": {
+    "path": "${MM2_WORKSPACE}/artifacts/evaluator_6923422114",
+    "required_external": true
+  },
+  "transformer_reference100k_corrected_evaluation_20261017_7a91e02b7e": {
+    "path": "${MM2_WORKSPACE}/artifacts/transformer_reference100k_corrected_evaluation_20261017_7a91e02b7e",
+    "required_external": true
+  },
+  "native122_a1e596ec38": {
+    "path": "${MM2_WORKSPACE}/artifacts/native122_a1e596ec38",
+    "required_external": true
+  },
+  "native122_bb3521d8fd": {
+    "path": "${MM2_WORKSPACE}/artifacts/native122_bb3521d8fd",
+    "required_external": true
+  },
+  "native122_5410c1dd44": {
+    "path": "${MM2_WORKSPACE}/artifacts/native122_5410c1dd44",
+    "required_external": true
+  },
+  "native122long_39f72f6699": {
+    "path": "${MM2_WORKSPACE}/artifacts/native122long_39f72f6699",
+    "required_external": true
+  },
+  "native122long_77d63a7547": {
+    "path": "${MM2_WORKSPACE}/artifacts/native122long_77d63a7547",
+    "required_external": true
+  },
+  "native122long_5f8b936134": {
+    "path": "${MM2_WORKSPACE}/artifacts/native122long_5f8b936134",
+    "required_external": true
+  },
+  "horizon_controlled_motion_mamba2_official_corrected_20261017_633fa66262": {
+    "path": "${MM2_WORKSPACE}/artifacts/horizon_controlled_motion_mamba2_official_corrected_20261017_633fa66262",
+    "required_external": true
+  },
+  "g1_native105k_original117k_continue5k_20261015_1013b51fe3": {
+    "path": "${MM2_WORKSPACE}/artifacts/g1_native105k_original117k_continue5k_20261015_1013b51fe3",
+    "required_external": true
+  },
+  "checkpoints_json_9802580e14": {
+    "path": "${MM2_WORKSPACE}/artifacts/checkpoints_json_9802580e14",
+    "required_external": true
+  },
+  "native100_556814cda8": {
+    "path": "${MM2_WORKSPACE}/artifacts/native100_556814cda8",
+    "required_external": true
+  },
+  "native100_7f6178507d": {
+    "path": "${MM2_WORKSPACE}/artifacts/native100_7f6178507d",
+    "required_external": true
+  },
+  "native100_c99434159a": {
+    "path": "${MM2_WORKSPACE}/artifacts/native100_c99434159a",
+    "required_external": true
+  },
+  "window_three_models_20261016_739644bcea": {
+    "path": "${MM2_WORKSPACE}/artifacts/window_three_models_20261016_739644bcea",
+    "required_external": true
+  },
+  "checkpoints_json_3208734ffd": {
+    "path": "${MM2_WORKSPACE}/artifacts/checkpoints_json_3208734ffd",
+    "required_external": true
+  },
+  "native110_8a5da22645": {
+    "path": "${MM2_WORKSPACE}/artifacts/native110_8a5da22645",
+    "required_external": true
+  },
+  "native110_b1938a997f": {
+    "path": "${MM2_WORKSPACE}/artifacts/native110_b1938a997f",
+    "required_external": true
+  },
+  "native110_4f8d2d0faa": {
+    "path": "${MM2_WORKSPACE}/artifacts/native110_4f8d2d0faa",
+    "required_external": true
+  },
+  "native117_ec5d4a4cff": {
+    "path": "${MM2_WORKSPACE}/artifacts/native117_ec5d4a4cff",
+    "required_external": true
+  },
+  "native117_7f8e9402ba": {
+    "path": "${MM2_WORKSPACE}/artifacts/native117_7f8e9402ba",
+    "required_external": true
+  },
+  "native117_322ce007dd": {
+    "path": "${MM2_WORKSPACE}/artifacts/native117_322ce007dd",
+    "required_external": true
+  },
+  "g1_external_matched100k_evaluation_20261019_aa0c66c5b2": {
+    "path": "${MM2_WORKSPACE}/artifacts/g1_external_matched100k_evaluation_20261019_aa0c66c5b2",
+    "required_external": true
+  },
+  "aggregate_1aad8b047a": {
+    "path": "${MM2_WORKSPACE}/artifacts/aggregate_1aad8b047a",
+    "required_external": true
+  },
+  "dip_f7cfc7a212": {
+    "path": "${MM2_WORKSPACE}/artifacts/dip_f7cfc7a212",
+    "required_external": true
+  },
+  "worker2_7eeee74f77": {
+    "path": "${MM2_WORKSPACE}/artifacts/worker2_7eeee74f77",
+    "required_external": true
+  },
+  "omg_d99b93a47a": {
+    "path": "${MM2_WORKSPACE}/artifacts/omg_d99b93a47a",
+    "required_external": true
+  },
+  "worker0_190553b7d5": {
+    "path": "${MM2_WORKSPACE}/artifacts/worker0_190553b7d5",
+    "required_external": true
+  },
+  "cmdm_c351154ec6": {
+    "path": "${MM2_WORKSPACE}/artifacts/cmdm_c351154ec6",
+    "required_external": true
+  },
+  "dart_c75e45554f": {
+    "path": "${MM2_WORKSPACE}/artifacts/dart_c75e45554f",
+    "required_external": true
+  },
+  "dart_0035af58e1": {
+    "path": "${MM2_WORKSPACE}/artifacts/dart_0035af58e1",
+    "required_external": true
+  },
+  "fd2_2b0ac6586d": {
+    "path": "${MM2_WORKSPACE}/artifacts/fd2_2b0ac6586d",
+    "required_external": true
+  },
+  "horizon_controlled_motion_mamba2_official_streaming_20261017_5c22e1a818": {
+    "path": "${MM2_WORKSPACE}/artifacts/horizon_controlled_motion_mamba2_official_streaming_20261017_5c22e1a818",
+    "required_external": true
+  },
+  "transformer_reference40s_inference_audit_20261017_a5e11c9a98": {
+    "path": "${MM2_WORKSPACE}/artifacts/transformer_reference40s_inference_audit_20261017_a5e11c9a98",
+    "required_external": true
+  },
+  "motion_mamba2_official_backup_6b3706c1ce": {
+    "path": "${MM2_WORKSPACE}/artifacts/motion_mamba2_official_backup_6b3706c1ce",
+    "required_external": true
+  },
+  "g1_motion_mamba2_four_gpu_matched100k_20261009_a4a8fc8513": {
+    "path": "${MM2_WORKSPACE}/artifacts/g1_motion_mamba2_four_gpu_matched100k_20261009_a4a8fc8513",
+    "required_external": true
+  },
+  "motion_mamba2_official_bdd7ed85e7": {
+    "path": "${MM2_WORKSPACE}/artifacts/motion_mamba2_official_bdd7ed85e7",
+    "required_external": true
+  },
+  "motion_mamba2_official_08796df1ed": {
+    "path": "${MM2_WORKSPACE}/artifacts/motion_mamba2_official_08796df1ed",
+    "required_external": true
+  },
+  "checkpoint100000_pt_1f87866a73": {
+    "path": "${MM2_WORKSPACE}/artifacts/checkpoint100000_pt_1f87866a73",
+    "required_external": true
+  },
+  "transformer_reference100k_inference_audit_20261017_8a0402e361": {
+    "path": "${MM2_WORKSPACE}/artifacts/transformer_reference100k_inference_audit_20261017_8a0402e361",
+    "required_external": true
+  },
+  "transformer_reference_bdc5577700": {
+    "path": "${MM2_WORKSPACE}/artifacts/transformer_reference_bdc5577700",
+    "required_external": true
+  },
+  "transformer_reference_fd9bd95b7a": {
+    "path": "${MM2_WORKSPACE}/artifacts/transformer_reference_fd9bd95b7a",
+    "required_external": true
+  },
+  "dip_1c359ba854": {
+    "path": "${MM2_WORKSPACE}/artifacts/dip_1c359ba854",
+    "required_external": true
+  },
+  "motionstreamer_1341580a6d": {
+    "path": "${MM2_WORKSPACE}/artifacts/motionstreamer_1341580a6d",
+    "required_external": true
+  },
+  "native122_b02ca36f6f": {
+    "path": "${MM2_WORKSPACE}/artifacts/native122_b02ca36f6f",
+    "required_external": true
+  },
+  "native122long_1caf7c777c": {
+    "path": "${MM2_WORKSPACE}/artifacts/native122long_1caf7c777c",
+    "required_external": true
+  },
+  "native100_14d50cd02e": {
+    "path": "${MM2_WORKSPACE}/artifacts/native100_14d50cd02e",
+    "required_external": true
+  },
+  "native110_61642c30ca": {
+    "path": "${MM2_WORKSPACE}/artifacts/native110_61642c30ca",
+    "required_external": true
+  },
+  "native117_33d6c664cb": {
+    "path": "${MM2_WORKSPACE}/artifacts/native117_33d6c664cb",
+    "required_external": true
+  },
+  "g1_motionmamba_matched100k_20261022_3b602cb1f7": {
+    "path": "${MM2_WORKSPACE}/artifacts/g1_motionmamba_matched100k_20261022_3b602cb1f7",
+    "required_external": true
+  },
+  "native100_mamba_state_ablation_hiphi_20261021_2bb9f0cd7c": {
+    "path": "${MM2_WORKSPACE}/artifacts/native100_mamba_state_ablation_hiphi_20261021_2bb9f0cd7c",
+    "required_external": true
+  },
+  "result_d9d5acc6fa": {
+    "path": "${MM2_WORKSPACE}/artifacts/result_d9d5acc6fa",
+    "required_external": true
+  },
+  "cmdm_g1_7949ac0b80": {
+    "path": "${MM2_WORKSPACE}/artifacts/cmdm_g1_7949ac0b80",
+    "required_external": true
+  },
+  "budget_8380d6be9c": {
+    "path": "${MM2_WORKSPACE}/artifacts/budget_8380d6be9c",
+    "required_external": true
+  },
+  "boundary_request_json_411c8c0201": {
+    "path": "${MM2_WORKSPACE}/artifacts/boundary_request_json_411c8c0201",
+    "required_external": true
+  },
+  "config_json_4fd04156f5": {
+    "path": "${MM2_WORKSPACE}/artifacts/config_json_4fd04156f5",
+    "required_external": true
+  },
+  "train_json_07100a9573": {
+    "path": "${MM2_WORKSPACE}/artifacts/train_json_07100a9573",
+    "required_external": true
+  },
+  "budget_c691fc74db": {
+    "path": "${MM2_WORKSPACE}/artifacts/budget_c691fc74db",
+    "required_external": true
+  },
+  "boundary_request_json_0ef58f5b7f": {
+    "path": "${MM2_WORKSPACE}/artifacts/boundary_request_json_0ef58f5b7f",
+    "required_external": true
+  },
+  "budget_049ae3cc29": {
+    "path": "${MM2_WORKSPACE}/artifacts/budget_049ae3cc29",
+    "required_external": true
+  },
+  "boundary_request_json_f48ecbb0c6": {
+    "path": "${MM2_WORKSPACE}/artifacts/boundary_request_json_f48ecbb0c6",
+    "required_external": true
+  },
+  "budget_8b41ce1682": {
+    "path": "${MM2_WORKSPACE}/artifacts/budget_8b41ce1682",
+    "required_external": true
+  },
+  "boundary_request_json_c57be840ba": {
+    "path": "${MM2_WORKSPACE}/artifacts/boundary_request_json_c57be840ba",
+    "required_external": true
+  },
+  "budget_0935f0309d": {
+    "path": "${MM2_WORKSPACE}/artifacts/budget_0935f0309d",
+    "required_external": true
+  },
+  "boundary_request_json_b6038db50a": {
+    "path": "${MM2_WORKSPACE}/artifacts/boundary_request_json_b6038db50a",
+    "required_external": true
+  },
+  "budget_0739dbc0fb": {
+    "path": "${MM2_WORKSPACE}/artifacts/budget_0739dbc0fb",
+    "required_external": true
+  },
+  "boundary_request_json_9d53d29275": {
+    "path": "${MM2_WORKSPACE}/artifacts/boundary_request_json_9d53d29275",
+    "required_external": true
+  },
+  "g1_minimal_four_gpu_matched100k_20261009_9abe8ef732": {
+    "path": "${MM2_WORKSPACE}/artifacts/g1_minimal_four_gpu_matched100k_20261009_9abe8ef732",
+    "required_external": true
+  },
+  "two_model_acceleration_json_4d4706321d": {
+    "path": "${MM2_WORKSPACE}/artifacts/two_model_acceleration_json_4d4706321d",
+    "required_external": true
+  }
+}

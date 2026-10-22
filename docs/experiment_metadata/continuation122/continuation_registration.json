@@ -1,0 +1,46 @@
+{
+  "passed": true,
+  "parent": "artifact://checkpoint5000_pt_3ecb96b6d8",
+  "parent_sha256": "2e828449addff3aa079387f319589cf4ac9b202c48577278a6d274f28b14f679",
+  "old_recipe_hash": "a3c8ae6cd69c8f4e26a99c5e0162d06c2cbb4ca0ca93c11087df2071e59ac198",
+  "new_recipe_hash": "291a7351054b34ec6e74d17a1b5745e8b280ae3bf84cb0bdafaed079588431e9",
+  "changed_keys": [
+    "boundary_request_path",
+    "budget_root",
+    "continuation_start",
+    "continuation_updates",
+    "execution_authorization",
+    "gpu_hours",
+    "interaction_schedule",
+    "kernel_gate_path",
+    "lazy_manifest_template",
+    "max_updates",
+    "name",
+    "parent",
+    "physical_gpus",
+    "refresh_steps",
+    "savepoints",
+    "teacher_current_history",
+    "wall_hours"
+  ],
+  "start_stage_step": 5000,
+  "end_stage_step": 10000,
+  "global_start": 112000,
+  "actual_parent": 117000,
+  "actual_target": 122000,
+  "scheduler_preserved_completed": 5000,
+  "GT_sampler_resumes_at": 5000,
+  "teacher_generations": [
+    3,
+    4,
+    5
+  ],
+  "full_Adam_FP32_masters_eight_rank_RNG_inherited": true,
+  "no_parent_checkpoint_rewritten": true,
+  "new_authorized_budget": {
+    "updates": 5000,
+    "checks": 100,
+    "gpu_hours": 144,
+    "wall_hours": 30
+  }
+}

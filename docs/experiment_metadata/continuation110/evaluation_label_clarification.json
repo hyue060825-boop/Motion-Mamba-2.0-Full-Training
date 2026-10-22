@@ -1,0 +1,10 @@
+{
+  "time": 1792032393.3642323,
+  "scope": "metadata clarification only; no raw scores or training changed",
+  "original_key": "baseline100k",
+  "actual_checkpoint": "artifact://checkpoint5000_pt_6ac426c0a8",
+  "actual_step": 105000,
+  "correct_display_label": "105k continuation parent",
+  "development_panel": "evaluation/future_panels/DEV/PANEL.json",
+  "comparison_note": "Use only matched cases within this continuation branch; not original100k panel or Main3"
+}

@@ -1,0 +1,15 @@
+{
+  "parent": "artifact://checkpoint5000_pt_3ecb96b6d8",
+  "parent_sha256": "2e828449addff3aa079387f319589cf4ac9b202c48577278a6d274f28b14f679",
+  "optimizer_exact": true,
+  "scheduler_exact": true,
+  "schedule": {
+    "spec": {
+      "kind": "constant",
+      "lr": 1e-05
+    },
+    "completed": 5000
+  },
+  "rank_RNG_restored_from_parent": true,
+  "registration": "artifact://continuation_registration_json_c9b0ca8a2e"
+}

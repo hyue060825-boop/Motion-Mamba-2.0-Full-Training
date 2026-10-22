@@ -1,0 +1,13 @@
+{
+  "datasets": [
+    "BONES-SEED",
+    "HiPHI",
+    "HumanML3D"
+  ],
+  "fps": 25,
+  "physical_features": 414,
+  "hybrid_features": 148,
+  "normalization": "frozen training statistics, never evaluation statistics",
+  "raw_datasets_committed": false,
+  "source_splits_and_licenses_must_be_preserved": true
+}

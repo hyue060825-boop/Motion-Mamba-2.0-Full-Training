@@ -1,0 +1,43 @@
+{
+  "passed": true,
+  "parent": "artifact://checkpoint5000_pt_6ac426c0a8",
+  "parent_sha256": "37cf4d0cf13e462db5d37369202b3d5c74b2dc436fd04a4f5beece8224077321",
+  "old_recipe_hash": "8061d513d5f9b76f6972f9475b368d729ddd46472d277d4f4ea3ab81ce8dfe2a",
+  "new_recipe_hash": "53c24074b14a085f65b3d692591ed8e575fb034c93d731d0910a86b2c56c7480",
+  "changed_keys": [
+    "boundary_request_path",
+    "budget_root",
+    "continuation_start",
+    "continuation_updates",
+    "execution_authorization",
+    "interaction_schedule",
+    "kernel_gate_path",
+    "lazy_manifest_template",
+    "max_updates",
+    "name",
+    "parent",
+    "refresh_steps",
+    "savepoints",
+    "teacher_current_history"
+  ],
+  "start_stage_step": 5000,
+  "end_stage_step": 10000,
+  "global_start": 100000,
+  "actual_parent": 105000,
+  "actual_target": 110000,
+  "scheduler_preserved_completed": 5000,
+  "GT_sampler_resumes_at": 5000,
+  "teacher_generations": [
+    3,
+    4,
+    5
+  ],
+  "full_Adam_FP32_masters_four_rank_RNG_inherited": true,
+  "no_parent_checkpoint_rewritten": true,
+  "new_authorized_budget": {
+    "updates": 5000,
+    "gpu_hours": 144,
+    "wall_hours": 30
+  },
+  "original_weights_and_results_retained": true
+}

@@ -1,0 +1,11 @@
+{
+  "caps": {
+    "B": 100127,
+    "checks": 200,
+    "C": 0,
+    "teacher": 0
+  },
+  "total_updates": 100327,
+  "gpu_hours": 480,
+  "resource_switch_replayed_updates": 127
+}

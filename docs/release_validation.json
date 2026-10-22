@@ -1,0 +1,56 @@
+{
+  "passed": true,
+  "scope": "Source-release validation; no new100k training/benchmark quality claim",
+  "python_source_files": 1209,
+  "files_reviewed": 1301,
+  "syntax_passed": true,
+  "credential_scan_passed": true,
+  "no_private_absolute_source_paths": true,
+  "release_tests": "5 passed",
+  "CPU_model_training_evaluator_imports": true,
+  "CPU_100k_strict_load": {
+    "actual_step": 100000,
+    "state_entries": 422
+  },
+  "CPU_layer_forward_input_parameter_gradient_exact": [
+    {
+      "norm_first": false,
+      "masked": false,
+      "forward_exact": true,
+      "input_gradient_exact": true,
+      "parameter_gradients_exact": true
+    },
+    {
+      "norm_first": false,
+      "masked": true,
+      "forward_exact": true,
+      "input_gradient_exact": true,
+      "parameter_gradients_exact": true
+    },
+    {
+      "norm_first": true,
+      "masked": false,
+      "forward_exact": true,
+      "input_gradient_exact": true,
+      "parameter_gradients_exact": true
+    },
+    {
+      "norm_first": true,
+      "masked": true,
+      "forward_exact": true,
+      "input_gradient_exact": true,
+      "parameter_gradients_exact": true
+    }
+  ],
+  "CUDA_initialization_exact": {
+    "root_model": 206,
+    "body_model": 206,
+    "denoiser_aux": 10
+  },
+  "initialization_optimizer_updates": 0,
+  "foundation32_and512_CLI_dry_runs": true,
+  "wheel_built": true,
+  "full_training_rerun": false,
+  "full_GPU_renamed_rollout_equivalence": false,
+  "external_data_and_weights_required": true
+}

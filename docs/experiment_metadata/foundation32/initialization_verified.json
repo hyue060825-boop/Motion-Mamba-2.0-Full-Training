@@ -1,0 +1,188 @@
+{
+  "official_compatible_keys": [
+    "global_root_hybrid_proj.weight",
+    "global_root_hybrid_proj.bias",
+    "global_root_hybrid_constraints_proj.weight",
+    "global_root_hybrid_constraints_proj.bias",
+    "local_root_hybrid_proj.weight",
+    "local_root_hybrid_proj.bias",
+    "local_root_hybrid_constraints_proj.weight",
+    "local_root_hybrid_constraints_proj.bias",
+    "future_constraints_proj.weight",
+    "future_constraints_proj.bias",
+    "root_model.embed_text.weight",
+    "root_model.embed_text.bias",
+    "root_model.embed_timestep.time_embed.0.weight",
+    "root_model.embed_timestep.time_embed.0.bias",
+    "root_model.embed_timestep.time_embed.2.weight",
+    "root_model.embed_timestep.time_embed.2.bias",
+    "root_model.output_linear.weight",
+    "root_model.output_linear.bias",
+    "root_model.linear_first_heading_angle.weight",
+    "root_model.linear_first_heading_angle.bias",
+    "body_model.embed_text.weight",
+    "body_model.embed_text.bias",
+    "body_model.embed_timestep.time_embed.0.weight",
+    "body_model.embed_timestep.time_embed.0.bias",
+    "body_model.embed_timestep.time_embed.2.weight",
+    "body_model.embed_timestep.time_embed.2.bias",
+    "body_model.output_linear.weight",
+    "body_model.output_linear.bias",
+    "body_model.linear_first_heading_angle.weight",
+    "body_model.linear_first_heading_angle.bias"
+  ],
+  "mismatches": [],
+  "native_sequence_modules_new": true,
+  "old_native_weights_loaded": false,
+  "trainable_parameters": 363315364,
+  "initial_weights_hash": "6a552c99157d76d7d67b00798292d6f054417891867854d61b87ecfb2eb91b26",
+  "dropouts": [
+    {
+      "name": "root_model.sequence_pos_encoder.dropout",
+      "p": 0.0
+    },
+    {
+      "name": "root_model.motion_token_embedding.dropout",
+      "p": 0.0
+    },
+    {
+      "name": "root_model.sequence_stack.layers.0.mlp.2",
+      "p": 0.0
+    },
+    {
+      "name": "root_model.sequence_stack.layers.0.mlp.4",
+      "p": 0.0
+    },
+    {
+      "name": "root_model.sequence_stack.layers.1.mlp.2",
+      "p": 0.0
+    },
+    {
+      "name": "root_model.sequence_stack.layers.1.mlp.4",
+      "p": 0.0
+    },
+    {
+      "name": "root_model.sequence_stack.layers.2.mlp.2",
+      "p": 0.0
+    },
+    {
+      "name": "root_model.sequence_stack.layers.2.mlp.4",
+      "p": 0.0
+    },
+    {
+      "name": "root_model.sequence_stack.layers.3.mlp.2",
+      "p": 0.0
+    },
+    {
+      "name": "root_model.sequence_stack.layers.3.mlp.4",
+      "p": 0.0
+    },
+    {
+      "name": "root_model.sequence_stack.layers.4.mlp.2",
+      "p": 0.0
+    },
+    {
+      "name": "root_model.sequence_stack.layers.4.mlp.4",
+      "p": 0.0
+    },
+    {
+      "name": "root_model.sequence_stack.layers.5.mlp.2",
+      "p": 0.0
+    },
+    {
+      "name": "root_model.sequence_stack.layers.5.mlp.4",
+      "p": 0.0
+    },
+    {
+      "name": "root_model.sequence_stack.layers.6.mlp.2",
+      "p": 0.0
+    },
+    {
+      "name": "root_model.sequence_stack.layers.6.mlp.4",
+      "p": 0.0
+    },
+    {
+      "name": "root_model.sequence_stack.layers.7.mlp.2",
+      "p": 0.0
+    },
+    {
+      "name": "root_model.sequence_stack.layers.7.mlp.4",
+      "p": 0.0
+    },
+    {
+      "name": "body_model.sequence_pos_encoder.dropout",
+      "p": 0.0
+    },
+    {
+      "name": "body_model.motion_token_embedding.dropout",
+      "p": 0.0
+    },
+    {
+      "name": "body_model.sequence_stack.layers.0.mlp.2",
+      "p": 0.0
+    },
+    {
+      "name": "body_model.sequence_stack.layers.0.mlp.4",
+      "p": 0.0
+    },
+    {
+      "name": "body_model.sequence_stack.layers.1.mlp.2",
+      "p": 0.0
+    },
+    {
+      "name": "body_model.sequence_stack.layers.1.mlp.4",
+      "p": 0.0
+    },
+    {
+      "name": "body_model.sequence_stack.layers.2.mlp.2",
+      "p": 0.0
+    },
+    {
+      "name": "body_model.sequence_stack.layers.2.mlp.4",
+      "p": 0.0
+    },
+    {
+      "name": "body_model.sequence_stack.layers.3.mlp.2",
+      "p": 0.0
+    },
+    {
+      "name": "body_model.sequence_stack.layers.3.mlp.4",
+      "p": 0.0
+    },
+    {
+      "name": "body_model.sequence_stack.layers.4.mlp.2",
+      "p": 0.0
+    },
+    {
+      "name": "body_model.sequence_stack.layers.4.mlp.4",
+      "p": 0.0
+    },
+    {
+      "name": "body_model.sequence_stack.layers.5.mlp.2",
+      "p": 0.0
+    },
+    {
+      "name": "body_model.sequence_stack.layers.5.mlp.4",
+      "p": 0.0
+    },
+    {
+      "name": "body_model.sequence_stack.layers.6.mlp.2",
+      "p": 0.0
+    },
+    {
+      "name": "body_model.sequence_stack.layers.6.mlp.4",
+      "p": 0.0
+    },
+    {
+      "name": "body_model.sequence_stack.layers.7.mlp.2",
+      "p": 0.0
+    },
+    {
+      "name": "body_model.sequence_stack.layers.7.mlp.4",
+      "p": 0.0
+    }
+  ],
+  "official_frontend_seed": 123,
+  "normalizer_dir": "artifact://stats_a5227494f3",
+  "checkpoint": "artifact://checkpoint0_pt_17f1a13e6b"
+}

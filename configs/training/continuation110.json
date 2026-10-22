@@ -1,0 +1,173 @@
+{
+  "version": "startpoint_route_v1",
+  "parent": "artifact://checkpoint5000_pt_6ac426c0a8",
+  "optimizer_state_policy": "inherit",
+  "loss": "motion_mamba2_informed_v1",
+  "max_updates": 10000,
+  "batch_size": 512,
+  "gt_slots": 512,
+  "seed": 202610110100,
+  "savepoints": [
+    5010,
+    6000,
+    7500,
+    10000
+  ],
+  "lr": 1e-05,
+  "clip": 1,
+  "precision": "fp32_master_v1",
+  "data_index": "artifact://data_index_jsonl_9966c1bc60",
+  "exclusions": "artifact://data_exclusions_json_cea79e86ab",
+  "text_roots": [
+    "artifact://text_2814eb077d",
+    "artifact://text_ffb4893fa0",
+    "artifact://text_ab6b18a477",
+    "artifact://text_c67999f84c",
+    "artifact://text_4e49f7c373",
+    "artifact://text_4b22881cd0",
+    "artifact://text_4370eccad8",
+    "artifact://text_c1198ae4ae"
+  ],
+  "text_dropout": 0.1,
+  "constraint_dropout": 0.1,
+  "HGF": [
+    {
+      "H": 0,
+      "F": 0,
+      "p": 0.1
+    },
+    {
+      "H": 52,
+      "F": 0,
+      "p": 0.25
+    },
+    {
+      "H": 196,
+      "F": 0,
+      "p": 0.2
+    },
+    {
+      "H": 0,
+      "F": 196,
+      "p": 0.1
+    },
+    {
+      "H": 52,
+      "F": 144,
+      "p": 0.2
+    },
+    {
+      "H": 144,
+      "F": 52,
+      "p": 0.15
+    }
+  ],
+  "source_ratios": {
+    "bones": 0.7,
+    "humanml3d": 0.15,
+    "hiphi": 0.15
+  },
+  "empty_spatial": 0.2,
+  "spatial_families": [
+    "root_trajectory",
+    "root_waypoint",
+    "full_keyframe",
+    "joint_position",
+    "joint_rotation"
+  ],
+  "extensions": {
+    "boundary": 0,
+    "root_velocity": 0,
+    "fk_goal": 0,
+    "paired_skate": 0,
+    "joint_limit": 0,
+    "accepted_boundary": 0,
+    "state_consistency": 0,
+    "free_contact": 0
+  },
+  "budget_root": "artifact://budget_9303d3acb9",
+  "legacy_dev": "artifact://result_json_2d77398ea7",
+  "phase_stop": {
+    "same_source_task_action_control_phase_two_noises": true,
+    "slip_delta_pp": 20,
+    "contact_speed_ratio": 1.5,
+    "joint_absolute_deg": 30,
+    "joint_delta_deg": 5,
+    "seam_root_m": 0.5,
+    "seam_root_delta_m": 0.1,
+    "seam_joint_deg": 45,
+    "seam_joint_delta_deg": 10
+  },
+  "project_choices": true,
+  "name": "native105k_original117k_continue5k",
+  "initialization_policy": "carry_state_new_stage",
+  "betas": [
+    0.9,
+    0.999
+  ],
+  "eps": 1e-08,
+  "weight_decay": 0.01,
+  "scheduler": {
+    "kind": "constant",
+    "lr": 1e-05
+  },
+  "kernel_gate_path": "artifact://no_collection_graph_admission_json_e0a07fc911",
+  "execution_authorization": "USER_20261015_CONTINUE_5000_AFTER_COMPLETED_MOVING_EVALUATION",
+  "batching": "equal DDP mean over ranks and microbatches; global512; max admitted microbatch",
+  "official_frontend_reused": true,
+  "audit_every": 1000,
+  "future_visibility_contract": "mask_no_visible_future_v1",
+  "resource_policy": "never stop foreign jobs; four ranks until eight available and same-batch topology check passes",
+  "quality_stop_policy": "ordinary early regression warns, does not terminate; nonfinite or invalid states stop; persistent severe loss of parent skills at >=2000 updates blocks fraction increase and further expansion",
+  "kernel_training_backend": "existing eager/reference; training_adt prototype is not enabled",
+  "per_rank_microbatch": 64,
+  "lazy_manifest_template": "artifact://manifest_template_json_e9eb9b16e9",
+  "boundary_request_path": "artifact://boundary_request_json_56c827b890",
+  "interaction_schedule": [
+    {
+      "from": 1,
+      "to": 10000,
+      "teacher": 64,
+      "GT": 448
+    }
+  ],
+  "refresh_steps": [
+    5000,
+    6000,
+    7500
+  ],
+  "source_families_per_generation": 32,
+  "collection_history": "student-only after104 GT frames; teacher shadow does not commit",
+  "bptt": "unchanged detached canonical history; G52 reconstruction conditioned on actual F; continuous teacher-shadow qualification and all student entry stages",
+  "ratio_admission_policy": {
+    "minimum_review_update": 2000,
+    "hold_increase_if_foundation_function_or_joint_drops_more_than": 10,
+    "max_teacher_slots": 128,
+    "maximum_increase_factor_per_review": 2
+  },
+  "global_start": 100000,
+  "future_teacher_slots": 32,
+  "legacy_teacher_slots": 32,
+  "collection_families": 8,
+  "teacher_future_horizons": [
+    75,
+    127,
+    179,
+    219
+  ],
+  "teacher_future_goal_policy": "natural_teacher_endpoint_then_same_visible_goal_query; no hidden extra controls",
+  "future_condition_version": "timed_root_waypoint_248_v1",
+  "collection_world_size": 4,
+  "teacher_current_history": "current105k student refreshed at cumulative5000/6000/7500; unchanged collector",
+  "evaluation_policy": "fixed baseline112k, interaction105k; full event and timed-goal trajectories; independent family/noise separation",
+  "wall_hours": 30,
+  "physical_gpus": [
+    0,
+    1,
+    2,
+    3
+  ],
+  "gpu_hours": 144,
+  "continuation_start": 5000,
+  "continuation_updates": 5000
+}

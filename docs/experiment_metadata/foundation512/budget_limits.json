@@ -1,0 +1,10 @@
+{
+  "caps": {
+    "B": 25000,
+    "checks": 200,
+    "C": 0,
+    "teacher": 0
+  },
+  "total_updates": 25200,
+  "gpu_hours": 480
+}

@@ -1,0 +1,148 @@
+{
+  "version": "startpoint_route_v1",
+  "parent": "fresh_external_denoiser_seed123",
+  "optimizer_state_policy": "fresh",
+  "loss": "ardy_informed_v1",
+  "max_updates": 100000,
+  "batch_size": 32,
+  "gt_slots": 32,
+  "seed": 2026100607,
+  "savepoints": [
+    10,
+    100,
+    1000,
+    10000,
+    20000,
+    30000,
+    40000,
+    50000,
+    60000,
+    70000,
+    75000,
+    80000,
+    90000,
+    100000
+  ],
+  "lr": 5e-05,
+  "clip": 1,
+  "precision": "fp32_master_v1",
+  "data_index": "artifact://data_index_jsonl_9966c1bc60",
+  "exclusions": "artifact://data_exclusions_json_cea79e86ab",
+  "text_roots": [
+    "artifact://text_2814eb077d",
+    "artifact://text_ffb4893fa0",
+    "artifact://text_ab6b18a477",
+    "artifact://text_c67999f84c",
+    "artifact://text_4e49f7c373",
+    "artifact://text_4b22881cd0",
+    "artifact://text_4370eccad8",
+    "artifact://text_c1198ae4ae"
+  ],
+  "text_dropout": 0.1,
+  "constraint_dropout": 0.1,
+  "HGF": [
+    {
+      "H": 0,
+      "F": 0,
+      "p": 0.1
+    },
+    {
+      "H": 52,
+      "F": 0,
+      "p": 0.25
+    },
+    {
+      "H": 196,
+      "F": 0,
+      "p": 0.2
+    },
+    {
+      "H": 0,
+      "F": 196,
+      "p": 0.1
+    },
+    {
+      "H": 52,
+      "F": 144,
+      "p": 0.2
+    },
+    {
+      "H": 144,
+      "F": 52,
+      "p": 0.15
+    }
+  ],
+  "source_ratios": {
+    "bones": 0.7,
+    "humanml3d": 0.15,
+    "hiphi": 0.15
+  },
+  "empty_spatial": 0.2,
+  "spatial_families": [
+    "root_trajectory",
+    "root_waypoint",
+    "full_keyframe",
+    "joint_position",
+    "joint_rotation"
+  ],
+  "extensions": {
+    "boundary": 0,
+    "root_velocity": 0,
+    "fk_goal": 0,
+    "paired_skate": 0,
+    "joint_limit": 0,
+    "accepted_boundary": 0,
+    "state_consistency": 0,
+    "free_contact": 0
+  },
+  "budget_root": "artifact://budget_c691fc74db",
+  "legacy_dev": "artifact://result_json_2d77398ea7",
+  "phase_stop": {
+    "same_source_task_action_control_phase_two_noises": true,
+    "slip_delta_pp": 20,
+    "contact_speed_ratio": 1.5,
+    "joint_absolute_deg": 30,
+    "joint_delta_deg": 5,
+    "seam_root_m": 0.5,
+    "seam_root_delta_m": 0.1,
+    "seam_joint_deg": 45,
+    "seam_joint_delta_deg": 10
+  },
+  "project_choices": true,
+  "name": "FD2_Wan_G1_matched100k",
+  "initialization_policy": "weights_new_stage",
+  "betas": [
+    0.9,
+    0.999
+  ],
+  "eps": 1e-08,
+  "weight_decay": 0.01,
+  "scheduler": {
+    "kind": "warmup_cosine",
+    "start": 1e-06,
+    "peak": 5e-05,
+    "minimum": 1e-05,
+    "warmup": 500,
+    "total": 100000
+  },
+  "kernel_gate_path": "artifact://gate_json_cad651b776",
+  "initialization_seed": 123,
+  "execution_authorization": "2026-10-19 user explicitly requests next two candidates with previous verified acceleration",
+  "batching": "8 samples computed together; 2 ranks x2 accumulation or 4 ranks x1 accumulation; effective batch32",
+  "official_frontend_reused": true,
+  "audit_every": 1000,
+  "future_visibility_contract": "mask_no_visible_future_v1",
+  "resource_policy": "assigned4 GPUs; never terminate foreign jobs",
+  "quality_stop_policy": "do not stop because early random-init quality is below pretrained old model; stop on nonfinite loss/gradient, divergent ranks, corrupt input, OOM or budget limit",
+  "kernel_training_backend": "existing eager/reference; training_adt prototype is not enabled",
+  "boundary_request_path": "artifact://boundary_request_json_0ef58f5b7f",
+  "per_rank_microbatch": 8,
+  "matched_native_recipe": "artifact://train_json_07100a9573",
+  "architecture": "fd2_common_G1_architecture_adapter",
+  "checkpoint_retention": "Keep existing checkpoints; future saves every10k plus75k/100k and complete emergency boundary",
+  "mode": "ardy",
+  "save_every": 10000,
+  "stats_dir": "artifact://stats_a5227494f3",
+  "training_codec_contract": "g1_history_codec_104_v1",
+  "generation_contract": "g1_committed_v3"
+}

@@ -1,0 +1,44 @@
+{
+  "parent": "artifact://checkpoint5000_pt_3ecb96b6d8",
+  "updates": 5000,
+  "actual_start": 117000,
+  "actual_target": 122000,
+  "devices": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7
+  ],
+  "global_batch": 512,
+  "logical_per_rank_batch": 64,
+  "per_rank_GT": 56,
+  "per_rank_teacher": 8,
+  "full_state_continuation": true,
+  "protocol": "original112k_to117k microrecipe; previous extreme acceleration after fresh full512 gate",
+  "refresh_stage_steps": [
+    5000,
+    6000,
+    7500
+  ],
+  "save_stage_steps": [
+    5010,
+    6000,
+    7500,
+    10000
+  ],
+  "complete_checkpoint_every100": true,
+  "no_new_objective_or_thresholds": true,
+  "all_checkpoints_retained": true,
+  "online_not_replaced": true,
+  "primary_metric": "constraint_error_cm; no Root ADE",
+  "teacher": "original official ARDY shadow, current student histories",
+  "comparison": "paired parent117k vs candidate122k; existing DEV/future then fixed controlled endpoint and evaluator_v2",
+  "resource_budget": {
+    "gpu_hours": 144,
+    "wall_hours": 30
+  }
+}
